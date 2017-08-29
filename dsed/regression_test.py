@@ -61,7 +61,7 @@ def simulation_test(project_file,
 
 if __name__=='__main__':
     test_fn = sys.argv[1]
-    veneer_path = sys.argv[2]
+    veneer_path = os.path.abspath(sys.argv[2])
     source_version = '4.1.1' if len(sys.argv)<4 else sys.argv[3]
 
     tests = pd.read_csv(test_fn)
