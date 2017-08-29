@@ -4,6 +4,7 @@ Functionality to support regression testing of dynamic sednet
 import os
 import sys
 import json
+from datetime import datetime
 
 import tempfile
 import shutil
@@ -49,8 +50,9 @@ def simulation_test(project_file,
                 print("* %s"%fn)
                 print(error)
                 print("-"*40)
-            assert False
-        assert len(check_ok)
+            raise Exception('%d differences.'%len(errors))
+        if not len(check_ok):
+            raise Exception('no results!')
 
     finally:
         if processes:
@@ -58,6 +60,21 @@ def simulation_test(project_file,
 
         if delete_after:
             shutil.rmtree(temp_dir)
+
+def write_junit_style_results(results,fn):
+    from junit_xml import TestSuite,TestCase
+
+    test_cases = []
+    for k,v in results.items():
+        tc = TestCase(k,'RegressionTest',v['elapsed'],v['message'],'')
+        print(v)
+        if not v['success']:
+            tc.add_failure_info(v['message'])
+        test_cases.append(tc)
+
+    suite = TestSuite('dynamic sednet regression tests',test_cases)
+    with open(fn,'w') as f:
+        TestSuite.to_file(f,[suite])
 
 if __name__=='__main__':
     test_fn = sys.argv[1]
@@ -71,15 +88,26 @@ if __name__=='__main__':
         row = tests.irow(ix)
         os.chdir(row.Folder)
         try:
+            start_t = datetime.now()
             simulation_test(row.ProjectFn,
                             row.ExpectedResults,
                             veneer_path,
                             source_version)
             print("SUCCESS: " + row.Folder)
-            results[row.Folder]='SUCCESS'
+            success=True
+            msg=None
         except Exception as e:
-            print('FAILED: '+row.Folder)
-            results[row.Folder]='FAILURE: %s'%str(e)
+            print('FAILED: %s with %s'%(row.Folder,str(e)))
+            success=False
+            msg = str(e)
         finally:
+            end_t = datetime.now()
+            elapsed = (end_t - start_t).total_seconds()
             os.chdir(wd)
-    print(json.dumps(results))
+            results[row.Folder]={
+                'success':success,
+                'elapsed':elapsed,
+                'message':msg
+            }
+
+    write_junit_style_results(results,'regression_test_results.xml')
