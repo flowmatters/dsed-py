@@ -1,2 +1,2 @@
 
-from .gbr import *
+from .common import *
