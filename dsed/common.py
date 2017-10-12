@@ -64,7 +64,7 @@ else:
 
 class Results(object):
     def __init__(self,run_name):
-        from queries import ResultsQueries
+        from .queries import ResultsQueries
         import os
         self._time_periods = None
         self.run_name = run_name
