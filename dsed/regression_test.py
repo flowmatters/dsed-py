@@ -5,15 +5,26 @@ import os
 import sys
 import json
 from datetime import datetime
+from glob import glob
 
 import tempfile
 import shutil
-from veneer.manage import create_command_line, start, kill_all_now
-import veneer
+from veneer.manage import create_command_line, start, kill_all_now, print_from_all
 from .compare_results import compare
+from .common import Veneer
 import pandas as pd
 
 RUN_NAME='regression_test'
+REGRESSION_TEST_RUN_OPTIONS={
+    'AssumeCommandLine':False, # Refers to Source regression test system. Outputs go to temp directory
+    'AssumeCommandLine':True,
+    'DoNamedNodeRecording':True,
+    'DoRegionalTimeSeriesReporting':True
+}
+
+# TODO
+# * Set PreRunCatchments=True, RunNetworksInParallel=True
+# * Time run...
 
 def simulation_test(project_file,
                     expected_results_folder,
@@ -29,21 +40,47 @@ def simulation_test(project_file,
         temp_dir = tempfile.mkdtemp('_dsed_test')
 
     try:
-        veneer_cmd_path = create_command_line(veneer_path,source_version,dest=os.path.join(temp_dir,'veneer_cmd'),force=False)
-        processes,ports = start(project_file,veneer_exe=veneer_cmd_path,
-                                overwrite_plugins=True,ports=port,
-                                remote=False,script=True,debug=True)
+        veneer_cmd_path = create_command_line(veneer_path,source_version,dest=os.path.join(temp_dir,'veneer_cmd'),force=True)
 
-        v = veneer.Veneer(port=ports[0])
+        start_load = datetime.now()
+        processes,ports,((o,_),(e,_)) = start(project_file,veneer_exe=veneer_cmd_path,
+                                overwrite_plugins=True,ports=port,
+                                remote=False,script=True,debug=True,
+                                return_io=True)
+        end_load = datetime.now()
+        elapsed_load = (end_load - start_load).total_seconds()
+        print('Loaded in %s seconds'%elapsed_load)
+
+        v = Veneer(port=ports[0])
+
+        # Set go fast options
+        v.model.source_scenario_options("PerformanceConfiguration","ProcessCatchmentsInParallel",True)
+        v.configure_options({
+            'RunNetworksInParallel':True,
+            'PreRunCatchments':True,
+            'ParallelFlowPhase':True
+        })
+
         output_path = os.path.join(temp_dir,'test_outputs')
         if os.path.exists(output_path):
             shutil.rmtree(output_path)
-        result, run_url = v.run_model(ModelOutputPath=output_path,runName=RUN_NAME,IsRegressionTestRun=False)
+        print('Writing results to %s'%output_path)
+        start_sim = datetime.now()
+        result, run_url = v.run_model(ModelOutputPath=output_path,runName=RUN_NAME,**REGRESSION_TEST_RUN_OPTIONS)
+        print(result,run_url)
         assert result==302
+        assert run_url
+        end_sim = datetime.now()
+        elapsed_sim = (end_sim - start_sim).total_seconds()
+        print('Run complete in %s seconds'%elapsed_sim)
+        print_from_all(e,'ERROR')
+        print_from_all(o,'OUTPUT')
 
+        print('Results',glob(os.path.join(output_path,'*')))
         scen_name = v.model.get('scenario.Name')
         full_results_path = os.path.join(output_path,scen_name,RUN_NAME)
         errors, check_ok = compare(expected_results_folder,full_results_path)
+        print('Comparison complete')
         if len(errors):
             print("==== ERRORS ====")
             for fn,error in errors.items():
