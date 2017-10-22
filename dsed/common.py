@@ -26,25 +26,29 @@ def value_diff(dfL,dfR):
         delta[col] = dfL[col] - dfR[col]
     return delta
 
-def veneer(**kwargs):
+def Veneer(*args,**kwargs):
     from veneer import Veneer
-    class GBRVeneer(Veneer):
-        def configureOptions(self,options):
-            self.configure_options(options)
+    result = Veneer(*args,**kwargs)
 
-        def configure_options(self,options):
-            lines = ["# Generated Script","from Dynamic_SedNet.PluginSetup import DSScenarioDetails"]
-            lines += ["DSScenarioDetails.%s = %s"%(k,v) for (k,v) in options.items()]
-            script = '\n'.join(lines)
-            #print(script)
-            res = self.model._safe_run(script)
+    def configureOptions(self,options):
+        self.configure_options(options)
 
-        def set_run_name(self,name):
-            self.model.set('scenario.CurrentConfiguration.runName',name,literal=True)
+    def configure_options(self,options):
+        lines = ["# Generated Script","from Dynamic_SedNet.PluginSetup import DSScenarioDetails"]
+        lines += ["DSScenarioDetails.%s = %s"%(k,v) for (k,v) in options.items()]
+        script = '\n'.join(lines)
+        #print(script)
+        res = self.model._safe_run(script)
 
-        def run_contributor(self,results,fn):
-            import os
-            script = """
+    def set_run_name(self,name):
+        self.model.set('scenario.CurrentConfiguration.runName',name,literal=True)
+
+    def set_output_path(self,name):
+        self.model.set('scenario.CurrentConfiguration.ModelOutputPath',name.replace('\\','\\\\'),literal=True)
+
+    def run_contributor(self,results,fn):
+        import os
+        script = """
 import Dynamic_SedNet.Results.Contributor.RegionalReportingContributor as RegionalReportingContributor
 import Dynamic_SedNet.Tools.ToolsGeneral as ToolsGeneral
 contrib = RegionalReportingContributor()
@@ -57,10 +61,14 @@ if contrib.Success:
 else:
   result = contrib.Error
 """%(results.path,os.path.join(results.path,'%s.csv'%fn))
-            self.model.runScript(script)
+        self.model.runScript(script)
 
-
-    return GBRVeneer(**kwargs)
+    result.configureOptions = configureOptions.__get__(result,result.__class__)
+    result.configure_options = configure_options.__get__(result,result.__class__)
+    result.set_run_name = set_run_name.__get__(result,result.__class__)
+    result.set_output_path = set_output_path.__get__(result,result.__class__)
+    result.run_contributor = run_contributor.__get__(result,result.__class__)
+    return result
 
 class Results(object):
     def __init__(self,run_name):
