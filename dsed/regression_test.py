@@ -12,6 +12,7 @@ import shutil
 from veneer.manage import create_command_line, start, kill_all_now, print_from_all
 from .compare_results import compare
 from .common import Veneer
+from .testing.general import write_junit_style_results
 import pandas as pd
 
 RUN_NAME='regression_test'
@@ -98,21 +99,6 @@ def simulation_test(project_file,
         if delete_after:
             shutil.rmtree(temp_dir)
 
-def write_junit_style_results(results,fn):
-    from junit_xml import TestSuite,TestCase
-
-    test_cases = []
-    for k,v in results.items():
-        tc = TestCase(k,'RegressionTest',v['elapsed'],v['message'],'')
-        print(v)
-        if not v['success']:
-            tc.add_failure_info(v['message'])
-        test_cases.append(tc)
-
-    suite = TestSuite('dynamic sednet regression tests',test_cases)
-    with open(fn,'w') as f:
-        TestSuite.to_file(f,[suite])
-
 if __name__=='__main__':
     test_fn = sys.argv[1]
     veneer_path = os.path.abspath(sys.argv[2])
@@ -147,4 +133,4 @@ if __name__=='__main__':
                 'message':msg
             }
 
-    write_junit_style_results(results,'regression_test_results.xml')
+    write_junit_style_results(results,'regression_test_results.xml','dynamic sednet regression tests')
