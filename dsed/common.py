@@ -205,7 +205,7 @@ class Results(object):
 
 class DifferenceResults(object):
     def __init__(self,run1,run2):
-        from queries import ResultsQueries
+        from .queries import ResultsQueries
         self._run1 = Results(run1)
         self._run2 = Results(run2)
         self.run_name = '('+self._run1.run_name + ' - ' + self._run2.run_name+')'
