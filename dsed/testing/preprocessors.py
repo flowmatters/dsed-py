@@ -15,6 +15,31 @@ from datetime import datetime
 
 veneer.general.PRINT_SCRIPTS=True
 
+def _compare(expected,result):
+    expected = expected.rename(columns=dict(zip(orig_cols,unitless_cols)))
+    results_reordered = result[expected.columns]
+
+    assert (expected.columns==results_reordered.columns).all()
+
+    results=[]
+    for col in expected.columns:
+        if results_reordered.dtypes[col]==np.dtype('float64'):
+            exp = expected[col]
+            res = results_reordered[col]
+            if not (np.abs(exp-res)<1e-6).all():
+                results.append(col)
+        elif results_reordered.dtypes[col]==np.dtype('int64'):
+            exp = expected[col]
+            res = results_reordered[col]
+            if not (exp==res).all():
+                results.append(col)
+        else:
+            exp = expected[col].fillna('')
+            res = results_reordered[col].fillna('')
+            if not (exp==res).all():
+                results.append(col)
+    assert len(results)==0
+
 def preprocessor_test(context,project_file,preprocessor,preprocess_params,expected):
     try:
         print('Running %s for %s'%(preprocessor.__name__,project_file))
@@ -24,29 +49,13 @@ def preprocessor_test(context,project_file,preprocessor,preprocess_params,expect
 
         orig_cols = expected.columns
         unitless_cols = [col.split(' (')[0] for col in orig_cols]
-        expected = expected.rename(columns=dict(zip(orig_cols,unitless_cols)))
-        results_reordered = result[expected.columns]
 
-        assert (expected.columns==results_reordered.columns).all()
+        if isinstance(expected,list):
+            for exp,act in zip(expected,result):
+                _compare(exp,act)
+        else:
+            compare(expected,result)
 
-        results=[]
-        for col in expected.columns:
-            if results_reordered.dtypes[col]==np.dtype('float64'):
-                exp = expected[col]
-                res = results_reordered[col]
-                if not (np.abs(exp-res)<1e-6).all():
-                    results.append(col)        
-            elif results_reordered.dtypes[col]==np.dtype('int64'):
-                exp = expected[col]
-                res = results_reordered[col]
-                if not (exp==res).all():
-                    results.append(col)        
-            else:
-                exp = expected[col].fillna('')
-                res = results_reordered[col].fillna('')
-                if not (exp==res).all():
-                    results.append(col)
-        assert len(results)==0
     finally:
         context.shutdown()
 
@@ -64,7 +73,12 @@ if __name__=='__main__':
         preprocessor = 'run_%s'%test['preprocessor']
         project_fn = test['project']
         args = test['parameters']
-        expected = pd.read_csv(test['expected_results'])
+        expected_fn = test['expected_results']
+
+        if isinstance(expected_fn,list):
+            expected = [pd.read_csv(fn) for fn in expected_fn]
+        else:
+            expected = pd.read_csv(expected_fn)
         label = test.get('label','unlabelled')
         label = "%s (%s)"%(preprocessor,label)
         print("================= %s ================="%label)

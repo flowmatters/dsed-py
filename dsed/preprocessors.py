@@ -7,7 +7,7 @@ import os
 
 PREPROCESSORS=[
     ('gully','Dynamic_SedNet.Parameterisation.Models.GullyParameterisationModel','GullyParameters'),
-    ('usle','Dynamic_SedNet.Parameterisation.Models.CoverTimeSeries_SpatialPreprocessorModel',None)
+    ('usle','Dynamic_SedNet.Parameterisation.Models.CoverTimeSeries_SpatialPreprocessorModel',['ResultsTable','averageResultsTable'])
 ]
 
 def _generate_preprocess_fn(current_module,name,klass,output_name):
@@ -16,6 +16,9 @@ def _generate_preprocess_fn(current_module,name,klass,output_name):
         return run_preprocessor(v,klass,output_name,**kwargs)
     new_fn.__name__ = 'run_%s'%name
     setattr(current_module,new_fn.__name__,new_fn)
+    doc = 'See %s_default_params() for parameter names and default values\n'%name
+    if output_name:
+        doc += '\nReturns: %s'%str(output_name)
 
     def param_fn(v):
         return v.model.find_default_parameters(klass)
@@ -62,9 +65,13 @@ def run_preprocessor(v,preprocessor,result_name=None,**kwargs):
         script += 'result["%s"] = p.%s\n'%(output,output)
     result = v.model._safe_run(script)
     result = v.model.simplify_response(result['Response'])
-    if result_name:
+    if result_name is None:
+        return result
+
+    if isinstance(result_name,str):
         return pd.DataFrame(result[result_name])
-    return result
+
+    return [pd.DataFrame(result[rn]) for rn in result_name]
 
 _generate_preprocessor_functions()
 
