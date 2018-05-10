@@ -7,7 +7,7 @@ import os
 
 PREPROCESSORS=[
     ('gully','Dynamic_SedNet.Parameterisation.Models.GullyParameterisationModel','GullyParameters'),
-    ('usle','Dynamic_SedNet.Parameterisation.Models.CoverTimeSeries_SpatialPreprocessorModel',['ResultsTable','averageResultsTable'])
+    ('usle','Dynamic_SedNet.Parameterisation.Models.CoverTimeSeries_SpatialPreprocessorModel',['ResultsTable','globalAverageResultsTable'])
 ]
 
 def _generate_preprocess_fn(current_module,name,klass,output_name):
