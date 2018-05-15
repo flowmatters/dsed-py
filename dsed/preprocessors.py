@@ -6,8 +6,10 @@ import pandas as pd
 import os
 
 PREPROCESSORS=[
+    ('climate','Dynamic_SedNet.Parameterisation.Models.ClimateCollationModel',None),
     ('gully','Dynamic_SedNet.Parameterisation.Models.GullyParameterisationModel','GullyParameters'),
-    ('usle','Dynamic_SedNet.Parameterisation.Models.CoverTimeSeries_SpatialPreprocessorModel',['ResultsTable','globalAverageResultsTable'])
+    ('usle','Dynamic_SedNet.Parameterisation.Models.CoverTimeSeries_SpatialPreprocessorModel',['ResultsTable','globalAverageResultsTable']),
+    ('gbrusle','GBR_DynSed_Extension.Parameterisation.Models.GBRUSLECoverTimeSeriesSpatialPreprocessorModel',None)
 ]
 
 def _generate_preprocess_fn(current_module,name,klass,output_name):
