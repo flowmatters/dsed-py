@@ -73,7 +73,7 @@ def run_preprocessor(v,preprocessor,result_name=None,**kwargs):
     if isinstance(result_name,str):
         return pd.DataFrame(result[result_name])
 
-    return [pd.DataFrame(result[rn]) for rn in result_name]
+    return {rn:pd.DataFrame(result[rn]) for rn in result_name}
 
 _generate_preprocessor_functions()
 
