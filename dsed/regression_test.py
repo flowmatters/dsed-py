@@ -132,7 +132,8 @@ if __name__=='__main__':
             msg=None
         except Exception as e:
             print('FAILED: %s with %s'%(row.Folder,str(e)))
-            print(e.__traceback__)
+            import traceback
+            traceback.print_tb(e.__traceback__)
             success=False
             msg = str(e)
         finally:
