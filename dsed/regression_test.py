@@ -108,7 +108,7 @@ if __name__=='__main__':
     wd = os.getcwd()
     results = {}
     for ix in range(len(tests)):
-        row = tests.irow(ix)
+        row = tests.iloc[ix]
         os.chdir(row.Folder)
         try:
             start_t = datetime.now()
