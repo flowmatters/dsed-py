@@ -32,7 +32,7 @@ setup(
         name='dsed-py',
         version=version,
         description="Support for running dynamic sednet simulations",
-        packages=["dsed"],
+        packages=["dsed","dsed.testing"],
         long_description=read("README.md"),
         classifiers=filter(None, classifiers.split("\n")),
         keywords='hydrology scripting dynamic sednet',
