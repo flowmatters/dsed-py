@@ -15,6 +15,7 @@ from .common import Veneer
 from .testing.general import write_junit_style_results
 import pandas as pd
 
+DEFAULT_SOURCE_PATH='C:\\Program Files\\eWater'
 RUN_NAME='regression_test'
 REGRESSION_TEST_RUN_OPTIONS={
     'AssumeCommandLine':False, # Refers to Source regression test system. Outputs go to temp directory
@@ -32,7 +33,8 @@ def simulation_test(project_file,
                     veneer_path,
                     source_version='4.1.1',
                     port=44444,
-                    temp_dir=None):
+                    temp_dir=None,
+                    source_path=DEFAULT_SOURCE_PATH):
     processes=None
     delete_after=False
 
@@ -41,7 +43,10 @@ def simulation_test(project_file,
         temp_dir = tempfile.mkdtemp('_dsed_test')
 
     try:
-        veneer_cmd_path = create_command_line(veneer_path,source_version,dest=os.path.join(temp_dir,'veneer_cmd'),force=True)
+        veneer_cmd_path = create_command_line(veneer_path,source_version,
+                                              dest=os.path.join(temp_dir,'veneer_cmd'),
+                                              force=True,
+                                              source_path=source_path)
 
         start_load = datetime.now()
         processes,ports,((o,_),(e,_)) = start(project_file,veneer_exe=veneer_cmd_path,
@@ -103,6 +108,11 @@ if __name__=='__main__':
     test_fn = sys.argv[1]
     veneer_path = os.path.abspath(sys.argv[2])
     source_version = '4.1.1' if len(sys.argv)<4 else sys.argv[3]
+    if len(sys.argv)>=5:
+        source_path=sys.argv[4]
+        source_version=None
+    else:
+        source_path=DEFAULT_SOURCE_PATH
 
     tests = pd.read_csv(test_fn)
     wd = os.getcwd()
