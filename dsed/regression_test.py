@@ -125,12 +125,14 @@ if __name__=='__main__':
             simulation_test(row.ProjectFn,
                             row.ExpectedResults,
                             veneer_path,
-                            source_version)
+                            source_version,
+                            source_path=source_path)
             print("SUCCESS: " + row.Folder)
             success=True
             msg=None
         except Exception as e:
             print('FAILED: %s with %s'%(row.Folder,str(e)))
+            print(e.__traceback__)
             success=False
             msg = str(e)
         finally:
