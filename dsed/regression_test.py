@@ -122,7 +122,7 @@ if __name__=='__main__':
 
     if len(sys.argv)>=6:
         plugin_path=sys.argv[5]
-        plugins=[os.path.join(plugin_path,p) for p in PLUGINS]
+        plugins=[os.path.abspath(os.path.join(plugin_path,p)) for p in PLUGINS]
     else:
         plugins=[]
 
