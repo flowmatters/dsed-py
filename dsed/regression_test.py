@@ -15,6 +15,12 @@ from .common import Veneer
 from .testing.general import write_junit_style_results
 import pandas as pd
 
+PLUGINS=[
+    'Dynamic_SedNet.dll',
+    'GBR_DynSed_Extension.dll',
+    'ReefHydroCalModels.dll',
+    'DERMTools.dll'
+]
 DEFAULT_SOURCE_PATH='C:\\Program Files\\eWater'
 RUN_NAME='regression_test'
 REGRESSION_TEST_RUN_OPTIONS={
@@ -34,7 +40,8 @@ def simulation_test(project_file,
                     source_version='4.1.1',
                     port=44444,
                     temp_dir=None,
-                    source_path=DEFAULT_SOURCE_PATH):
+                    source_path=DEFAULT_SOURCE_PATH,
+                    plugins=[]):
     processes=None
     delete_after=False
 
@@ -50,9 +57,10 @@ def simulation_test(project_file,
 
         start_load = datetime.now()
         processes,ports,((o,_),(e,_)) = start(project_file,veneer_exe=veneer_cmd_path,
-                                overwrite_plugins=True,ports=port,
+                                overwrite_plugins=False,ports=port,
                                 remote=False,script=True,debug=True,
-                                return_io=True)
+                                return_io=True,
+                                additional_plugins=plugins)
         end_load = datetime.now()
         elapsed_load = (end_load - start_load).total_seconds()
         print('Loaded in %s seconds'%elapsed_load)
@@ -114,6 +122,12 @@ if __name__=='__main__':
     else:
         source_path=DEFAULT_SOURCE_PATH
 
+    if len(sys.argv)>=6:
+        plugin_path=sys.argv[5]
+        plugins=[os.path.join(plugin_path,p) for p in PLUGINS]
+    else:
+        plugins=[]
+
     tests = pd.read_csv(test_fn)
     wd = os.getcwd()
     results = {}
@@ -126,7 +140,8 @@ if __name__=='__main__':
                             row.ExpectedResults,
                             veneer_path,
                             source_version,
-                            source_path=source_path)
+                            source_path=source_path,
+                            plugins=plugins)
             print("SUCCESS: " + row.Folder)
             success=True
             msg=None
