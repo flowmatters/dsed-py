@@ -17,9 +17,7 @@ import pandas as pd
 
 PLUGINS=[
     'Dynamic_SedNet.dll',
-    'GBR_DynSed_Extension.dll',
-    'ReefHydroCalModels.dll',
-    'DERMTools.dll'
+    'GBR_DynSed_Extension.dll'
 ]
 DEFAULT_SOURCE_PATH='C:\\Program Files\\eWater'
 RUN_NAME='regression_test'
