@@ -50,6 +50,6 @@ setup(
             'pandas'
         ],
         extras_require={
-            'test': ['nose'],
+            'test': ['nose','junit-xml'],
         },
 )

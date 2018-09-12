@@ -10,16 +10,11 @@ from glob import glob
 import tempfile
 import shutil
 from veneer.manage import create_command_line, start, kill_all_now, print_from_all
-from .compare_results import compare
-from .common import Veneer
-from .testing.general import write_junit_style_results
+from dsed.compare_results import compare
+from dsed.common import Veneer
+from .general import TestServer, write_junit_style_results, arg_or_default
 import pandas as pd
 
-PLUGINS=[
-    'Dynamic_SedNet.dll',
-    'GBR_DynSed_Extension.dll'
-]
-DEFAULT_SOURCE_PATH='C:\\Program Files\\eWater'
 RUN_NAME='regression_test'
 REGRESSION_TEST_RUN_OPTIONS={
     'AssumeCommandLine':False, # Refers to Source regression test system. Outputs go to temp directory
@@ -32,38 +27,16 @@ REGRESSION_TEST_RUN_OPTIONS={
 # * Set PreRunCatchments=True, RunNetworksInParallel=True
 # * Time run...
 
-def simulation_test(project_file,
-                    expected_results_folder,
-                    veneer_path,
-                    source_version='4.1.1',
-                    port=44444,
-                    temp_dir=None,
-                    source_path=DEFAULT_SOURCE_PATH,
-                    plugins=[]):
-    processes=None
-    delete_after=False
-
-    if not temp_dir:
-        delete_after=True
-        temp_dir = tempfile.mkdtemp('_dsed_test')
-
+def simulation_test(context,
+                    project_file,
+                    expected_results_folder):
     try:
-        veneer_cmd_path = create_command_line(veneer_path,source_version,
-                                              dest=os.path.join(temp_dir,'veneer_cmd'),
-                                              force=True,
-                                              source_path=source_path)
-
+        print('Running simulation test for %s'%project_file)
         start_load = datetime.now()
-        processes,ports,((o,_),(e,_)) = start(project_file,veneer_exe=veneer_cmd_path,
-                                overwrite_plugins=False,ports=port,
-                                remote=False,script=True,debug=True,
-                                return_io=True,
-                                additional_plugins=plugins)
+        v = context.start_for_test(project_file)
         end_load = datetime.now()
         elapsed_load = (end_load - start_load).total_seconds()
         print('Loaded in %s seconds'%elapsed_load)
-
-        v = Veneer(port=ports[0])
 
         # Set go fast options
         v.model.source_scenario_options("PerformanceConfiguration","ProcessCatchmentsInParallel",True)
@@ -73,7 +46,7 @@ def simulation_test(project_file,
             'ParallelFlowPhase':True
         })
 
-        output_path = os.path.join(temp_dir,'test_outputs')
+        output_path = os.path.join(context.temp_dir,'test_outputs')
         if os.path.exists(output_path):
             shutil.rmtree(output_path)
         print('Writing results to %s'%output_path)
@@ -85,8 +58,6 @@ def simulation_test(project_file,
         end_sim = datetime.now()
         elapsed_sim = (end_sim - start_sim).total_seconds()
         print('Run complete in %s seconds'%elapsed_sim)
-        print_from_all(e,'ERROR')
-        print_from_all(o,'OUTPUT')
 
         print('Results',glob(os.path.join(output_path,'*')))
         scen_name = v.model.get('scenario.Name')
@@ -104,27 +75,11 @@ def simulation_test(project_file,
             raise Exception('no results!')
 
     finally:
-        if processes:
-            kill_all_now(processes)
-
-        if delete_after:
-            shutil.rmtree(temp_dir)
+        context.shutdown()
 
 if __name__=='__main__':
-    test_fn = sys.argv[1]
-    veneer_path = os.path.abspath(sys.argv[2])
-    source_version = '4.1.1' if len(sys.argv)<4 else sys.argv[3]
-    if len(sys.argv)>=5:
-        source_path=sys.argv[4]
-        source_version=None
-    else:
-        source_path=DEFAULT_SOURCE_PATH
-
-    if len(sys.argv)>=6:
-        plugin_path=sys.argv[5]
-        plugins=[os.path.abspath(os.path.join(plugin_path,p)) for p in PLUGINS]
-    else:
-        plugins=[]
+    test_fn = arg_or_default(1)
+    server = TestServer()
 
     tests = pd.read_csv(test_fn)
     wd = os.getcwd()
@@ -134,12 +89,9 @@ if __name__=='__main__':
         os.chdir(row.Folder)
         try:
             start_t = datetime.now()
-            simulation_test(row.ProjectFn,
-                            row.ExpectedResults,
-                            veneer_path,
-                            source_version,
-                            source_path=source_path,
-                            plugins=plugins)
+            simulation_test(server,
+                            row.ProjectFn,
+                            row.ExpectedResults)
             print("SUCCESS: " + row.Folder)
             success=True
             msg=None

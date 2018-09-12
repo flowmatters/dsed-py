@@ -10,17 +10,32 @@ import numpy as np
 import sys
 import string
 from dsed import preprocessors
-from .general import TestExecutionOptions, write_junit_style_results
+from .general import TestServer, write_junit_style_results, arg_or_default
 from datetime import datetime
+import traceback
 
 veneer.general.PRINT_SCRIPTS=True
 
-def _compare(expected,result):
+def assert_all_equal(exp,act):
+    if not (exp==act).all():
+        print("Expected: %s,\n Actual: %s"%(str(exp),str(act)))
+    assert (exp==act).all()
+
+def assert_empty(results):
+    if len(results):
+        print('Differences:')
+        print('\n'.join([str(r) for r in results]))
+    assert len(results)==0
+
+def _compare(expected,result,label):
+    orig_cols = expected.columns
+    unitless_cols = [col.split(' (')[0] for col in orig_cols]
+
     expected = expected.rename(columns=dict(zip(orig_cols,unitless_cols)))
     results_reordered = result[expected.columns]
 
-    assert (expected.columns==results_reordered.columns).all()
-
+    assert_all_equal(expected.columns,results_reordered.columns)
+    
     results=[]
     for col in expected.columns:
         if results_reordered.dtypes[col]==np.dtype('float64'):
@@ -38,7 +53,10 @@ def _compare(expected,result):
             res = results_reordered[col].fillna('')
             if not (exp==res).all():
                 results.append(col)
-    assert len(results)==0
+    if len(results):
+        expected.to_csv(label+'_expected.csv')
+        results_reordered.to_csv(label+'_actual.csv')
+    assert_empty(results)
 
 def preprocessor_test(context,project_file,preprocessor,preprocess_params,expected):
     try:
@@ -46,44 +64,44 @@ def preprocessor_test(context,project_file,preprocessor,preprocess_params,expect
         v = context.start_for_test(project_file)
         result = preprocessor(v,**preprocess_params)
         print('Preprocessor completed')
-
-        orig_cols = expected.columns
-        unitless_cols = [col.split(' (')[0] for col in orig_cols]
-
-        if isinstance(expected,list):
-            for exp,act in zip(expected,result):
-                _compare(exp,act)
+        failed = False
+        if isinstance(expected,dict):
+            for key,expected_df in expected.items():
+                try:
+                    _compare(expected_df,result[key],project_file.split('.')[0]+'_'+key)
+                except:
+                    failed = True
         else:
-            compare(expected,result)
-
+            _compare(expected,result,project_file.split('.')[0])
+        assert not failed
     finally:
         context.shutdown()
 
 if __name__=='__main__':
-    test_fn = sys.argv[1]
-    veneer_path = os.path.abspath(sys.argv[2])
-    source_version = '4.1.1' if len(sys.argv)<4 else sys.argv[3]
+    test_fn = arg_or_default(1)
+    veneer_path = os.path.abspath(arg_or_default(2))
+    source_version = arg_or_default(3,'4.1.1')
 
     tests =json.load(open(test_fn,'r'))
     wd = os.getcwd()
     results = {}
-    context = TestExecutionOptions(veneer_path,source_version,44444,None)
+    context = TestServer(port=44444)
 
     for test in tests:
         preprocessor = 'run_%s'%test['preprocessor']
         project_fn = test['project']
         args = test['parameters']
-        expected_fn = test['expected_results']
+        expected_fns = test['expected_results']
 
-        if isinstance(expected_fn,list):
-            expected = [pd.read_csv(fn) for fn in expected_fn]
+        if isinstance(expected_fns,str):
+            expected = pd.read_csv(expected_fns)
         else:
-            expected = pd.read_csv(expected_fn)
+            expected = {key:pd.read_csv(fn) for key,fn in expected_fns.items()}
         label = test.get('label','unlabelled')
         label = "%s (%s)"%(preprocessor,label)
         print("================= %s ================="%label)
         param_subst = {
-            'pwd':os.getcwd()
+            'pwd':os.getcwd().replace('\\','/')
         }
         for k,v in args.items():
             if isinstance(v,str):
@@ -97,6 +115,7 @@ if __name__=='__main__':
             msg=None
         except Exception as e:
             print('FAILED: %s with %s'%(label,str(e)))
+            print('\n'.join(traceback.format_tb(e.__traceback__)))
             success=False
             msg = str(e)
         finally:

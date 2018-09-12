@@ -83,9 +83,9 @@ def test_comparison(lhs,rhs):
         return str(e)
 
 def compare(resultsSet1,resultsSet2):
-    print('Comparing %s %s'%(resultsSet1, resultsSet2),end='')
     files1 = findFiles(resultsSet1)
     files2 = [f.replace(resultsSet1,resultsSet2) for f in files1]
+    print('Comparing %s %s (%d files)'%(resultsSet1, resultsSet2,len(files1)),end='')
     pairs = zip(files1,files2)
    
     tmp = {lhs.split('/')[-1]:test_comparison(lhs,rhs) for lhs,rhs in pairs}
