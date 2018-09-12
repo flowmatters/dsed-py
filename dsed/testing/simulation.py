@@ -45,6 +45,7 @@ def simulation_test(context,
             'PreRunCatchments':True,
             'ParallelFlowPhase':True
         })
+        v.model.simulation.configure_assurance_rule('Off','Data Sources result units must be commensurate with their usages')
 
         output_path = os.path.join(context.temp_dir,'test_outputs')
         if os.path.exists(output_path):
