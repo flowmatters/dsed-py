@@ -42,16 +42,16 @@ def fileComparison(lhs,rhs):
         return 'mismatched index'
 
     if len(oCols):
-        dsL.sort(oCols,inplace=True)
-        dsR.sort(oCols,inplace=True)
+        dsL.sort_values(by=oCols,inplace=True)
+        dsR.sort_values(by=oCols,inplace=True)
         if set(dsL.index)==set(range(len(dsL.index))):
             dsL['new_index'] = list(range(len(dsL.index)))
             dsL = dsL.set_index('new_index')
             dsR['new_index'] = list(range(len(dsL.index)))
             dsR = dsR.set_index('new_index')
     else:
-        dsL.sort(inplace=True)
-        dsR.sort(inplace=True)
+        dsL.sort_values(by=dsL.columns,inplace=True)
+        dsR.sort_values(by=dsR.columns,inplace=True)
 
     if len(dsL.columns) != len(dsR.columns) or np.any(dsL.columns != dsR.columns):
         return 'mismatched columns', set(dsL.columns)-set(dsR.columns)
