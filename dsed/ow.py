@@ -6,6 +6,8 @@ from openwater.template import TAG_MODEL
 import openwater.nodes as n
 from collections import defaultdict
 
+LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
+
 FINE_SEDIMENT = 'Sediment - Fine'
 COARSE_SEDIMENT = 'Sediment - Coarse'
 
@@ -14,6 +16,14 @@ STANDARD_NUTRIENTS = ['TN','TP']
 
 STANDARD_CONSTITUENTS = SEDIMENT_CLASSES + STANDARD_NUTRIENTS
 
+NIL_MODELS = {
+    'Dynamic_SedNet.Models.SedNet_Blank_Constituent_Generation_Model',
+    'RiverSystem.Catchments.Models.ContaminantGenerationModels.NilConstituent'
+}
+
+MODEL_NAME_TRANSLATIONS = {
+
+}
 # def default_generation_model(constituent,landuse):
 #     if constituent=='TSS':
 #         return n.USLEFineSedimentGeneration
@@ -75,10 +85,16 @@ class HydrologicalResponseUnit(object):
     pass
 
 class DynamicSednetCGU(object):
-    def generation_model(self,constituent,catchment):
-        return catchment.model_for(catchment.cg,constituent)
+    def __init__(self,generate_pesticides=True,erosion_processes=True,sediment_fallback_model=False):
+        self.generate_pesticides = generate_pesticides
+        self.erosion_processes = erosion_processes
+        self.sediment_fallback_model = sediment_fallback_model
+        assert (not bool(erosion_processes)) or (not bool(sediment_fallback_model))
 
-    def get_template(self,catchment,**kwargs):
+    def generation_model(self,constituent,catchment_template,**kwargs):
+        return catchment_template.model_for(catchment_template.cg,constituent)
+
+    def get_template(self,catchment_template,**kwargs):
         tag_values = list(kwargs.values())
         template = OWTemplate('cgu:%s'%kwargs.get('cgu','?'))
 
@@ -92,14 +108,36 @@ class DynamicSednetCGU(object):
         template.define_output(runoff_scale_node,'outflow','lateral')
         # This should be able to be done automatically... any input not defined
 
-        sed_gen = template.add_node(n.USLEFineSedimentGeneration,process="SedimentGeneration")
-        template.add_link(OWLink(quickflow_scale_node,'outflow',sed_gen,'quickflow'))
-        template.add_link(OWLink(baseflow_scale_node,'outflow',sed_gen,'baseflow'))
-        template.define_output(sed_gen,'totalLoadFine','generatedLoad',constituent=FINE_SEDIMENT)
-        template.define_output(sed_gen,'totalLoadCoarse','generatedLoad',constituent=COARSE_SEDIMENT)
+        if self.erosion_processes:
+            # Hillslope
+            sed_gen = template.add_node(n.USLEFineSedimentGeneration,process="HillslopeGeneration",**kwargs)
+            template.add_link(OWLink(quickflow_scale_node,'outflow',sed_gen,'quickflow'))
+            template.add_link(OWLink(baseflow_scale_node,'outflow',sed_gen,'baseflow'))
 
-        for con in catchment.constituents:
-            model = self.generation_model(con,catchment)
+            # Gully
+            gully_gen = template.add_node(n.DynamicSednetGully,process="GullyGeneration",**kwargs)
+            template.add_link(OWLink(quickflow_scale_node,'outflow',gully_gen,'quickflow'))
+
+            fine_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=FINE_SEDIMENT,**kwargs)
+            coarse_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=COARSE_SEDIMENT,**kwargs)
+
+            template.add_link(OWLink(sed_gen,'quickLoadFine',fine_sum,'i1'))
+            template.add_link(OWLink(gully_gen,'fineLoad',fine_sum,'i2'))
+
+            template.add_link(OWLink(sed_gen,'quickLoadCoarse',coarse_sum,'i1'))
+            template.add_link(OWLink(gully_gen,'coarseLoad',coarse_sum,'i2'))
+
+            template.define_output(fine_sum,'out','generatedLoad',constituent=FINE_SEDIMENT)
+            template.define_output(coarse_sum,'out','generatedLoad',constituent=COARSE_SEDIMENT)
+
+        for con in catchment_template.constituents:
+            if not self.sediment_fallback_model and (con == FINE_SEDIMENT or con == COARSE_SEDIMENT):
+                continue
+
+            if con in catchment_template.pesticides:
+                continue
+
+            model = self.generation_model(con,catchment_template,**kwargs)
             if model is None:
                 print('No regular constituent generation model for %s'%con)
                 continue
@@ -108,6 +146,21 @@ class DynamicSednetCGU(object):
             template.add_link(OWLink(quickflow_scale_node,'outflow',gen_node,'quickflow'))
             template.add_link(OWLink(baseflow_scale_node,'outflow',gen_node,'baseflow'))
             template.define_output(gen_node,'totalLoad','generatedLoad')
+
+        if self.generate_pesticides:
+            for con in catchment_template.pesticides:
+                dwc_node = template.add_node(n.EmcDwc,process='ConstituentDryWeatherGeneration',constituent=con,**kwargs)
+                template.add_link(OWLink(quickflow_scale_node,'outflow',dwc_node,'quickflow'))
+                template.add_link(OWLink(baseflow_scale_node,'outflow',dwc_node,'baseflow'))
+
+                ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=con,**kwargs)
+                template.add_link(OWLink(runoff_scale_node,'outflow',ts_node,'flow'))
+
+                sum_node = template.add_node(n.Sum,process='ConstituentGeneration',constituent=con,**kwargs)
+                template.add_link(OWLink(dwc_node,'totalLoad',sum_node,'i1'))
+                template.add_link(OWLink(ts_node,'outputLoad',sum_node,'i2'))
+
+                template.define_output(sum_node,'out','generatedLoad')
 
         return template
 
@@ -119,28 +172,29 @@ class DynamicSednetAgCGU(DynamicSednetCGU):
     #     return super(DynamicSednetAgCGU,self).generation_model(constituent)
 
 class NilCGU(DynamicSednetCGU):
-    def generation_model(self,*args):
+    def generation_model(self,*args,**kwargs):
         return None
 
-def cgu_factory(cgu):
-    if cgu=='Water/lakes':
-        return NilCGU()
-    if cgu in ['Dryland', 'Irrigation', 'Horticulture', 'Irrigated Grazing']:
-        return DynamicSednetAgCGU()
-    return DynamicSednetCGU()
 
 class DynamicSednetCatchment(object):
-    def __init__(self,disolved_nutrients=['DisN','DisP'],particulate_nutrients=['PartN','PartP'],pesticides=['Pesticide1']):
+    def __init__(self,dissolved_nutrients=['DisN','DisP'],particulate_nutrients=['PartN','PartP'],pesticides=['Pesticide1']):
         self.hrus = ['HRU']
         self.cgus = ['CGU']
         self.cgu_hrus = {'CGU':'HRU'}
-        self.constituents = SEDIMENT_CLASSES + disolved_nutrients + particulate_nutrients + pesticides
+        self.constituents = SEDIMENT_CLASSES + dissolved_nutrients + particulate_nutrients + pesticides
+        self.particulate_nutrients = particulate_nutrients
+        self.dissolved_nutrients = dissolved_nutrients
+        self.pesticides = pesticides
+        self.pesticide_cgus = None
+        self.erosion_cgus = None
+        self.sediment_fallback_cgu = None
 
         self.rr = n.Sacramento
-        self.cg = defaultdict(lambda:n.EmcDwc,{
-            FINE_SEDIMENT:None,
-            COARSE_SEDIMENT:None
-        })
+        self.cg = defaultdict(lambda:n.EmcDwc,{})
+        # {
+        #     FINE_SEDIMENT:None,
+        #     COARSE_SEDIMENT:None
+        # })
 
         self.routing = n.Muskingum
         self.transport = defaultdict(lambda:n.LumpedConstituentRouting,{
@@ -148,7 +202,7 @@ class DynamicSednetCatchment(object):
             COARSE_SEDIMENT:n.InstreamCoarseSediment
         })
 
-        for dn in disolved_nutrients:
+        for dn in dissolved_nutrients:
             self.cg[dn] = n.SednetDissolvedNutrientGeneration
             self.transport[dn] = n.InstreamDissolvedNutrientDecay
         for pn in particulate_nutrients:
@@ -157,9 +211,9 @@ class DynamicSednetCatchment(object):
 
     def model_for(self,provider,*args):
         if hasattr(provider,'__call__'):
-            return provider(*args)
+            return self.model_for(provider(*args),*args)
         if hasattr(provider,'__getitem__'):
-            return provider[args[0]]
+            return self.model_for(provider[args[0]],*args)
         return provider
 
     def reach_template(self,**kwargs):
@@ -213,6 +267,21 @@ class DynamicSednetCatchment(object):
 
         return reach_template
 
+    def cgu_factory(self,cgu):
+        gen_pesticides = (self.pesticide_cgus is None) or (cgu in self.pesticide_cgus)
+        erosion_proc = (self.erosion_cgus is None) or (cgu in self.erosion_cgus)
+        emc_proc = False
+        if self.sediment_fallback_cgu is not None:
+            emc_proc = cgu in self.sediment_fallback_cgu
+
+        if cgu=='Water/lakes':
+            return NilCGU()
+        # if cgu in ['Dryland', 'Irrigation', 'Horticulture', 'Irrigated Grazing']:
+        #     return DynamicSednetAgCGU()
+        return DynamicSednetCGU(generate_pesticides=gen_pesticides,
+                                erosion_processes=erosion_proc,
+                                sediment_fallback_model=emc_proc)
+
     def get_template(self,**kwargs):
         tag_values = list(kwargs.values())
         template = OWTemplate('catchment')
@@ -232,8 +301,8 @@ class DynamicSednetCatchment(object):
 
         for cgu in self.cgus:
             hru = self.cgu_hrus[cgu]
-            cgu_builder = cgu_factory(cgu)
-            cgu_template = cgu_builder.get_template(self,cgu=cgu)
+            cgu_builder = self.cgu_factory(cgu)
+            cgu_template = cgu_builder.get_template(self,cgu=cgu,**kwargs)
             hrus[hru].nest(cgu_template)
 
         template.nest(self.reach_template(**kwargs))
@@ -259,5 +328,5 @@ class DynamicSednetCatchment(object):
             dest_model = graph.nodes[dest_node][TAG_MODEL]
             src = STANDARD_LINKS[src_model][0] or src
             dest = STANDARD_LINKS[dest_model][1] or dest
-            print(src_node,src,dest_node,dest)
+            # print(src_node,src,dest_node,dest)
             graph.add_edge(src_node,dest_node,src=[src],dest=[dest])
