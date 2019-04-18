@@ -66,11 +66,20 @@ def simulation_test(context,
         errors, check_ok = compare(expected_results_folder,full_results_path)
         print('Comparison complete')
         if len(errors):
-            print("==== ERRORS ====")
+            messages = ["==== ERRORS ===="]
             for fn,error in errors.items():
-                print("* %s"%fn)
-                print(error)
-                print("-"*40)
+                messages.append("* %s"%fn)
+                messages.append(str(error))
+                df = error[0]
+                if hasattr(df,'columns'):
+                    for col in df.columns:
+                        if df[col].dtype != 'object':
+                            continue
+                        messages.append('Differences cover %s: %s'%(col,str(set(df[col]))))
+                messages.append("-"*40)
+            print('\n'.join(messages))
+            error_fn = 'ERRORS_'+project_file.split('.')[0]+'.txt'
+            open(error_fn,'w').write('\n'.join(messages))
             raise Exception('%d differences.'%len(errors))
         if not len(check_ok):
             raise Exception('no results!')
