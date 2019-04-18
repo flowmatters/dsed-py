@@ -3,6 +3,7 @@ Functionality to migrate a Source Dynamic Sednet model to Openwater (with limita
 
 
 '''
+import io
 import os
 import pandas as pd
 import geopandas as gpd
@@ -13,6 +14,7 @@ from dsed.ow import DynamicSednetCatchment
 from openwater import debugging
 from openwater.config import Parameteriser, ParameterTableAssignment, DataframeInput, \
                              DataframeInputs, DefaultParameteriser
+from veneer.actions import get_big_data_source
 
 SQKM_TO_SQM = 1000*1000
 M2_TO_HA = 1e-4
@@ -35,6 +37,91 @@ def simplify(table,column,criteria=['Constituent']):
     levels = levels_required(table,column,criteria)
     new_columns = criteria[:levels] + [column]
     return table.drop_duplicates(new_columns)[new_columns]
+
+def extract_source_config(v,dest,progress=print):
+    def writeable(fn):
+        return open(os.path.join(dest,fn),'w')
+
+    def write_json(fn,data):
+        json.dump(data,writeable(fn+'.json'))
+
+    def write_csv(fn,df):
+        df.to_csv(os.path.join(dest,fn+'.csv'))
+
+    fus = set(v.model.catchment.get_functional_unit_types())
+    constituents = v.model.get_constituents()
+    constituent_sources = v.model.get_constituent_sources()
+    assert len(constituent_sources)==1 # We don't use constituent source
+
+    network = v.network()
+    network_df = network.as_dataframe()
+
+    fu_areas = v.retrieve_csv('/tables/fus')
+    fu_areas = pd.DataFrame.from_csv(io.StringIO(fu_areas))
+
+    runoff_params = v.model.catchment.runoff.tabulate_parameters()
+    actual_rr_types = set(v.model.catchment.runoff.get_param_values('theBaseRRModel'))
+    assert len(actual_rr_types) == 1
+    sac_parameters = {k:v.model.catchment.runoff.get_param_values('theBaseRRModel.%s'%k) for k in v.model.find_parameters('TIME.Models.RainfallRunoff.Sacramento.Sacramento')}
+    name_columns = v.model.catchment.runoff.name_columns
+    sac_names = list(v.model.catchment.runoff.enumerate_names())
+    sac_names = {col:[v[i] for v in sac_names] for i,col in enumerate(name_columns)}
+    runoff_parameters = pd.DataFrame(dict(**sac_names,**sac_parameters))
+
+    runoff_inputs = v.model.catchment.runoff.tabulate_inputs('Dynamic_SedNet.Models.Rainfall.DynSedNet_RRModelShell')
+
+    progress('Getting data sources')
+    data_sources = v.data_sources()
+    #[ds['FullName'] for ds in data_sources]
+    progress('Getting climate data')
+    climate = get_big_data_source(v,'Climate Data',data_sources,progress)
+
+    progress('Getting usle timeseries')
+    usle_ts = v.data_source('USLE Data')
+    usle_timeseries = usle_ts['Items'][0]['Details']
+    
+    progress('Getting cropping metadata')
+    cropping_ts = get_big_data_source('Cropping Data')
+
+    generation_models = v.model.catchment.generation.model_table()
+    generation_parameters = v.model.catchment.generation.tabulate_parameters()
+
+    link_models = v.model.link.routing.model_table()
+    link_params = v.model.link.routing.tabulate_parameters()
+
+    transport_models = v.model.link.constituents.model_table()
+    transport_params = v.model.link.constituents.tabulate_parameters()
+
+    write_json('constituents',constituents)
+
+    write_json('fus',list(fus))
+
+    writeable('network.json').write(network_df.to_json())
+
+    write_csv('runoff_params',runoff_parameters)
+
+    write_csv('climate',climate)
+
+    write_csv('usle_timeseries',usle_timeseries)
+
+    write_csv('cropping',cropping_ts)
+
+    for model_type, table in generation_parameters.items():
+        write_csv('cg-%s'%model_type,table)
+
+    write_csv('cgmodels',generation_models)
+
+    write_csv('routing_models',link_models)
+
+    write_csv('routing_models',link_models)
+
+    write_csv('transportmodels',transport_models)
+
+    for model_type, table in transport_params.items():
+        write_csv('cr-%s'%model_type,table)
+
+    write_csv('fu_areas',fu_areas)
+
 
 def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
                    link_renames={},
