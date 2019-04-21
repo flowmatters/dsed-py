@@ -175,6 +175,7 @@ def extract_source_results(v,dest,progress=print,start=None,end=None):
 def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
                    link_renames={},
                    progress=print):
+  meta = {}
   def load_json(f):
     return json.load(open(os.path.join(data_path,f+'.json')))
 
@@ -182,14 +183,20 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
     return pd.read_csv(os.path.join(data_path,f+'.csv'),index_col=0,parse_dates=True)
 
   network = gpd.read_file(os.path.join(data_path,'network.json'))
+  meta['network'] = network
 
   time_period = pd.date_range(start,end)
+  meta['time_period'] = time_period
 
   orig_climate = load_csv('climate')
   cropping = load_csv('cropping')
   cropping = cropping.reindex(time_period)
   constituents = load_json('constituents')
+  meta['constituents'] = constituents
+
   fus = load_json('fus')
+  meta['fus'] = fus
+
   pesticide_cgus = set([c.split('$')[-1] for c in cropping.columns if 'Dissolved_Load_g_per_Ha' in c])
   cg_models = load_csv('cgmodels')
   cg_models = simplify(cg_models,'model',['Constituent','Functional Unit','Catchment'])
@@ -209,9 +216,16 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   ROUTING= node_types.StorageRouting
 
   dissolved_nutrients = [c for c in constituents if '_D' in c or '_F' in c]
+  meta['dissolved_nutrients'] = dissolved_nutrients
+
   particulate_nutrients = [c for c in constituents if '_Particulate' in c]
+  meta['particulate_nutrients'] = particulate_nutrients
+
   sediments = [c for c in constituents if c.startswith('Sediment - ')]
+  meta['sediments'] = sediments
+
   pesticides = [c for c in constituents if not c in dissolved_nutrients+particulate_nutrients+sediments]
+  meta['pesticides'] = pesticides
 
   catchment_template = DynamicSednetCatchment(dissolved_nutrients=[],  #dissolved_nutrients,
                                               particulate_nutrients=[], #particulate_nutrients,
@@ -353,4 +367,6 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
 
   model._parameteriser = p
 
-  return model
+  return model, meta
+
+  
