@@ -15,6 +15,7 @@ from openwater import debugging
 from openwater.config import Parameteriser, ParameterTableAssignment, DataframeInput, \
                              DataframeInputs, DefaultParameteriser
 from veneer.actions import get_big_data_source
+import veneer
 
 SQKM_TO_SQM = 1000*1000
 M2_TO_HA = 1e-4
@@ -93,28 +94,19 @@ def extract_source_config(v,dest,progress=print):
     transport_params = v.model.link.constituents.tabulate_parameters()
 
     write_json('constituents',constituents)
-
     write_json('fus',list(fus))
-
     writeable('network.json').write(network_df.to_json())
-
     write_csv('runoff_params',runoff_parameters)
-
     write_csv('climate',climate)
-
     write_csv('usle_timeseries',usle_timeseries)
-
     write_csv('cropping',cropping_ts)
 
     for model_type, table in generation_parameters.items():
         write_csv('cg-%s'%model_type,table)
 
     write_csv('cgmodels',generation_models)
-
     write_csv('routing_models',link_models)
-
     write_csv('routing_models',link_models)
-
     write_csv('transportmodels',transport_models)
 
     for model_type, table in transport_params.items():
@@ -122,6 +114,63 @@ def extract_source_config(v,dest,progress=print):
 
     write_csv('fu_areas',fu_areas)
 
+def extract_source_results(v,dest,progress=print,start=None,end=None):
+    def _ensure():
+        if not os.path.exists(dest):
+            os.makedirs(dest)
+
+    def writeable(fn):
+        _ensure()
+        return open(os.path.join(dest,fn),'w')
+
+    def write_json(fn,data):
+        json.dump(data,writeable(fn+'.json'))
+
+    def write_csv(fn,df):
+        _ensure()
+        df.to_csv(os.path.join(dest,fn+'.csv'))
+
+    constituents = v.model.get_constituents()
+    recorders = [
+        {'RecordingElement':'Downstream Flow Volume'},
+        {'RecordingElement':'Upstream Flow Volume'}
+    ]
+    recorders += [{'RecordingVariable':'Constituents@%s@Downstream Flow Mass'%c} for c in constituents]
+    recorders += [{'RecordingVariable':'Constituents@%s@Total Flow Mass'%c} for c in constituents]
+
+    v.configure_recording(enable=recorders)
+    progress('Configured recorders')
+
+    v.drop_all_runs()
+    v.model.simulation.configure_assurance_rule(level='Warning',category='Data Sources')
+
+    v.run_model(start=start,end=end)
+    progress('Simulation done.')
+
+    r = v.retrieve_run()
+    variables = set(r['Results'].as_dataframe().RecordingVariable)
+
+    downstream = v.retrieve_multiple_time_series(run_data=r,criteria={'RecordingVariable':'Downstream Flow Volume'},name_fn=veneer.name_for_location)
+    progress('Got downstream flow')
+
+    upstream = v.retrieve_multiple_time_series(run_data=r,criteria={'RecordingVariable':'Downstream Flow Volume'},name_fn=veneer.name_for_location)
+    progress('Got upstream flow')
+
+    write_csv('upstream_vol',upstream)
+    write_csv('downstream_vol',downstream)
+
+    def download_constituent_outputs(suffix,fn_suffix,name_fn=veneer.name_for_location):
+        constituent_variables = [v for v in variables if v.startswith('Constituents@') and v.endswith(suffix)]
+        progress(constituent_variables)
+        for cv in constituent_variables:
+            con = cv.split('@')[1].replace(' ','')
+            progress(con)
+            ts = v.retrieve_multiple_time_series(run_data=r,criteria={'RecordingVariable':cv},name_fn=name_fn)
+            write_csv(con+fn_suffix,ts)
+            progress('Downloaded %s %s'%(con,fn_suffix))
+
+    download_constituent_outputs('Downstream Flow Mass','network')
+    download_constituent_outputs('Total Flow Mass','generation',veneer.name_for_fu_and_sc)
 
 def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
                    link_renames={},
