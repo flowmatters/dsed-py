@@ -5,15 +5,22 @@ Functionality to migrate a Source Dynamic Sednet model to Openwater (with limita
 '''
 import io
 import os
-import pandas as pd
-import geopandas as gpd
 import json
+
+import pandas as pd
+import numpy as np
+import geopandas as gpd
+from scipy import stats
+
+from dsed.ow import DynamicSednetCatchment
+
 import openwater.nodes as node_types
 from openwater.examples import from_source
-from dsed.ow import DynamicSednetCatchment
 from openwater import debugging
 from openwater.config import Parameteriser, ParameterTableAssignment, DataframeInput, \
                              DataframeInputs, DefaultParameteriser
+from openwater.results import OpenwaterResults
+
 from veneer.actions import get_big_data_source
 import veneer
 
@@ -183,10 +190,10 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
     return pd.read_csv(os.path.join(data_path,f+'.csv'),index_col=0,parse_dates=True)
 
   network = gpd.read_file(os.path.join(data_path,'network.json'))
-  meta['network'] = network
 
   time_period = pd.date_range(start,end)
-  meta['time_period'] = time_period
+  meta['start'] = start
+  meta['end'] = end
 
   orig_climate = load_csv('climate')
   cropping = load_csv('cropping')
@@ -367,6 +374,66 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
 
   model._parameteriser = p
 
-  return model, meta
+  return model, meta, network
 
-  
+class SourceOWComparison(object):
+    def __init__(self,meta,ow_model_fn,ow_results_fn,source_results_path,catchments):
+        self.meta = meta
+        self.ow_model_fn = ow_model_fn
+        self.ow_results_fn = ow_results_fn
+        self.source_results_path = source_results_path
+        self.time_period = pd.date_range(self.meta['start'],self.meta['end'])
+        self.catchments = catchments
+        self.results = OpenwaterResults(ow_model_fn,ow_results_fn,self.time_period)
+
+        self.comparison_flows = None
+        self.link_outflow = None
+
+    def _load_csv(self,f):
+        return pd.read_csv(os.path.join(self.source_results_path,f+'.csv'),index_col=0,parse_dates=True)
+
+    def _load_flows(self):
+        if self.comparison_flows is not None:
+            return
+
+        routing = 'StorageRouting'
+        self.link_outflow = self.results.time_series(routing,'outflow','catchment')
+        self.comparison_flows = self._load_csv('Results/downstream_vol')
+        self.comparison_flows = self.comparison_flows.rename(columns={c:c.replace('link for catchment ','') for c in self.comparison_flows.columns})
+        self.comparison_flows = self.comparison_flows / 86400.0
+
+    def comparable_flows(self,sc):
+        self._load_flows()
+
+        if not sc in self.comparison_flows.columns or not sc in self.link_outflow.columns:
+            return None,None
+
+        orig = self.comparison_flows[sc]
+        ow = self.link_outflow[sc]
+        common = orig.index.intersection(ow.index)
+        orig = orig[common]
+        ow = ow[common]
+        return orig,ow
+
+    def compare_flow(self,sc):
+        orig, ow = self.comparable_flows(sc)
+        if orig is None or ow is None:
+            return np.nan
+
+        _,_,r_value,_,_ = stats.linregress(orig,ow)
+        return r_value**2
+
+    def compare_flows(self):
+        self._load_flows()
+        return pd.Series([self.compare_flow(c) for c in self.link_outflow.columns],index=self.link_outflow.columns)
+
+    def plot_flows(self,sc):
+        import matplotlib.pyplot as plt
+        orig, ow = self.comparable_flows(sc)
+        plt.figure()
+        orig.plot(label='orig')
+        ow.plot(label='ow')
+        plt.legend()
+        
+        plt.figure()
+        plt.scatter(orig,ow)
