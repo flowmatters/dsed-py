@@ -457,8 +457,6 @@ class SourceOWComparison(object):
             constituents = self.meta['constituents']
 
         errors = []
-        last_non_zero_sc=''
-        last_non_zero_fu=''
         for c in constituents:
             model,output = self.generation_model(c)
             progress(c)
@@ -481,8 +479,6 @@ class SourceOWComparison(object):
                             res['ssquares'] = sum_squares(orig_scaled,ow_scaled)
                             res['sum-ow'] = ow_scaled.sum()
                             res['sum-orig'] = orig_scaled.sum()
-                            last_non_zero_fu=fu
-                            last_non_zero_sc=sc
                         errors.append(res)
         return pd.DataFrame(errors)
 
@@ -491,11 +487,9 @@ class SourceOWComparison(object):
             constituents = self.meta['constituents']
 
         errors = []
-        last_non_zero_sc=''
-        last_non_zero_fu=''
         for c in constituents:
             progress(c)
-            comparison = self._load_csv('Results/%snetwork'%p).reindex(self.time_period)
+            comparison = self._load_csv('Results/%snetwork'%c).reindex(self.time_period)
             comparison = comparison[[catchment for catchment in comparison.columns if c.startswith('link for catchment ')]]
             comparison = comparison.rename(columns={catchment:catchment.replace('link for catchment ','') for catchment in comparison.columns})
             comparison = comparison * PER_DAY_TO_PER_SECOND
@@ -514,8 +508,7 @@ class SourceOWComparison(object):
                     res['ssquares'] = sum_squares(orig_scaled,ow_scaled)
                     res['sum-ow'] = ow_scaled.sum()
                     res['sum-orig'] = orig_scaled.sum()
-                    last_non_zero_sc=sc
                 errors.append(res)
         #    break
-        pesticides_routing_summary = pd.DataFrame(errors)
+        return pd.DataFrame(errors)
 
