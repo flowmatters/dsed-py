@@ -33,6 +33,9 @@ G_TO_KG=1e-3
 def nop(*args,**kwargs):
     pass
 
+def sum_squares(l1,l2):
+    return sum((np.array(l1)-np.array(l2))**2)
+
 def levels_required(table,column,criteria):
     if len(set(table[column]))==1:
         return 0
@@ -437,3 +440,82 @@ class SourceOWComparison(object):
         
         plt.figure()
         plt.scatter(orig,ow)
+
+    def generation_model(self,c):
+        if c in self.meta['pesticides']:
+            return 'Sum','out'
+        #return None,None
+        assert False
+
+    def tranposrt_model(self,c):
+        if c in self.meta['pesticides']:
+            return 'LumpedConstituentRouting','outflowLoad'
+        assert False
+
+    def compare_constituent_generation(self,constituents=None,progress=print):
+        if constituents is None:
+            constituents = self.meta['constituents']
+
+        errors = []
+        last_non_zero_sc=''
+        last_non_zero_fu=''
+        for c in constituents:
+            model,output = self.generation_model(c)
+            progress(c)
+            comparison = self._load_csv('Results/%sgeneration'%c).reindex(self.time_period)
+            for fu in self.meta['fus']:
+                ow = self.results.time_series(model,output,'catchment',cgu=fu,constituent=c)
+                comparison_columns = ['%s: %s'%(fu,catchment) for catchment in ow.columns]
+                fu_comparison = comparison[comparison_columns]
+                if ow.sum().sum()==0 and fu_comparison.sum().sum()==0:
+                    for sc in ow.columns:
+                        errors.append({'catchment':sc,'cgu':fu,'constituent':c,'ssquares':0,'sum-ow':0,'sum-orig':0})
+                else:
+                    for sc in ow.columns:
+                        res = {'catchment':sc,'cgu':fu,'constituent':c,'ssquares':0,'sum-ow':0,'sum-orig':0}
+                        ow_sc = ow[sc]
+                        orig_sc = fu_comparison['%s: %s'%(fu,sc)]
+                        if ow_sc.sum()>0 or orig_sc.sum()>0:
+                            orig_scaled = (orig_sc*86400)
+                            ow_scaled = (ow_sc*86400)
+                            res['ssquares'] = sum_squares(orig_scaled,ow_scaled)
+                            res['sum-ow'] = ow_scaled.sum()
+                            res['sum-orig'] = orig_scaled.sum()
+                            last_non_zero_fu=fu
+                            last_non_zero_sc=sc
+                        errors.append(res)
+        return pd.DataFrame(errors)
+
+    def compare_constituent_transport(self,constituents=None,progress=print):
+        if constituents is None:
+            constituents = self.meta['constituents']
+
+        errors = []
+        last_non_zero_sc=''
+        last_non_zero_fu=''
+        for c in constituents:
+            progress(c)
+            comparison = self._load_csv('Results/%snetwork'%p).reindex(self.time_period)
+            comparison = comparison[[catchment for catchment in comparison.columns if c.startswith('link for catchment ')]]
+            comparison = comparison.rename(columns={catchment:catchment.replace('link for catchment ','') for catchment in comparison.columns})
+            comparison = comparison * PER_DAY_TO_PER_SECOND
+            model,output = self.transport_model(c)
+            ow = self.results.time_series(model,output,'catchment',constituent=c)
+            for sc in ow.columns:
+                if not sc in comparison:
+                    continue
+
+                res = {'catchment':sc,'constituent':c,'ssquares':0,'sum-ow':0,'sum-orig':0}
+                ow_sc = ow[sc]
+                orig_sc = comparison[sc]
+                if ow_sc.sum()>0 or orig_sc.sum()>0:
+                    orig_scaled = (orig_sc*86400)
+                    ow_scaled = (ow_sc*86400)
+                    res['ssquares'] = sum_squares(orig_scaled,ow_scaled)
+                    res['sum-ow'] = ow_scaled.sum()
+                    res['sum-orig'] = orig_scaled.sum()
+                    last_non_zero_sc=sc
+                errors.append(res)
+        #    break
+        pesticides_routing_summary = pd.DataFrame(errors)
+
