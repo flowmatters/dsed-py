@@ -92,7 +92,7 @@ def extract_source_config(v,dest,progress=print):
     usle_timeseries = usle_ts['Items'][0]['Details']
     
     progress('Getting cropping metadata')
-    cropping_ts = get_big_data_source('Cropping Data')
+    cropping_ts = get_big_data_source(v,'Cropping Data',data_sources,progress)
 
     generation_models = v.model.catchment.generation.model_table()
     generation_parameters = v.model.catchment.generation.tabulate_parameters()
