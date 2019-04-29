@@ -215,6 +215,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   fine_sed_cg = dict(zip(fine_sed_cg['Functional Unit'],fine_sed_cg.model))
   erosion_cgus = [fu for fu,model in fine_sed_cg.items() if model == 'Dynamic_SedNet.Models.SedNet_Sediment_Generation']
   emc_cgus = [fu for fu,model in fine_sed_cg.items() if model == 'RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel']
+  meta['erosion_cgus'] = erosion_cgus
 
   cr_models = load_csv('transportmodels')
   cr_models = simplify(cr_models,'model',['Constituent'])
@@ -262,6 +263,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   tpl = tpl_nested.flatten()
 
   template_image = debugging.graph_template(tpl)
+  template_image.render('cgu_template',format='png')
 
   model = from_source.build_catchment_graph(catchment_template,network,progress=nop)
   progress('Model built')
@@ -393,7 +395,7 @@ class SourceOWComparison(object):
         self.link_outflow = None
 
     def _load_csv(self,f):
-        return pd.read_csv(os.path.join(self.source_results_path,f+'.csv'),index_col=0,parse_dates=True)
+        return pd.read_csv(os.path.join(self.source_results_path,f.replace(' ','')+'.csv'),index_col=0,parse_dates=True)
 
     def _load_flows(self):
         if self.comparison_flows is not None:
@@ -441,13 +443,18 @@ class SourceOWComparison(object):
         plt.figure()
         plt.scatter(orig,ow)
 
-    def generation_model(self,c):
+    def generation_model(self,c,fu):
+        if c in self.meta['sediments']:
+            if fu in self.meta['erosion_cgus']:
+                return 'Sum','out'
+            return 'EmcDwc','totalLoad'
+
         if c in self.meta['pesticides']:
             return 'Sum','out'
-        #return None,None
-        assert False
 
-    def tranposrt_model(self,c):
+        return 'EmcDwc','totalLoad'
+
+    def transport_model(self,c):
         if c in self.meta['pesticides']:
             return 'LumpedConstituentRouting','outflowLoad'
         assert False
@@ -458,10 +465,10 @@ class SourceOWComparison(object):
 
         errors = []
         for c in constituents:
-            model,output = self.generation_model(c)
             progress(c)
             comparison = self._load_csv('Results/%sgeneration'%c).reindex(self.time_period)
             for fu in self.meta['fus']:
+                model,output = self.generation_model(c,fu)
                 ow = self.results.time_series(model,output,'catchment',cgu=fu,constituent=c)
                 comparison_columns = ['%s: %s'%(fu,catchment) for catchment in ow.columns]
                 fu_comparison = comparison[comparison_columns]
@@ -486,15 +493,18 @@ class SourceOWComparison(object):
         if constituents is None:
             constituents = self.meta['constituents']
 
+        SOURCE_COL_PREFIX='link for catchment '
         errors = []
         for c in constituents:
             progress(c)
             comparison = self._load_csv('Results/%snetwork'%c).reindex(self.time_period)
-            comparison = comparison[[catchment for catchment in comparison.columns if c.startswith('link for catchment ')]]
-            comparison = comparison.rename(columns={catchment:catchment.replace('link for catchment ','') for catchment in comparison.columns})
+            comparison = comparison[[catchment for catchment in comparison.columns if catchment.startswith(SOURCE_COL_PREFIX)]]
+            comparison = comparison.rename(columns={catchment:catchment.replace(SOURCE_COL_PREFIX,'') for catchment in comparison.columns})
             comparison = comparison * PER_DAY_TO_PER_SECOND
             model,output = self.transport_model(c)
             ow = self.results.time_series(model,output,'catchment',constituent=c)
+            # progress(comparison.columns)
+            # progress(ow.columns)
             for sc in ow.columns:
                 if not sc in comparison:
                     continue

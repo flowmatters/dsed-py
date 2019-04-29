@@ -239,14 +239,14 @@ class DynamicSednetCatchment(object):
                 reach_template.define_input(transport_node,'incomingMass','generatedLoad')
                 reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
 
-                reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'lateralLoad'))
+                reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'incomingMass'))
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
                 fine_sed_model = transport_node
 
             elif model_type == n.InstreamCoarseSediment:
                 reach_template.define_input(transport_node,'incomingMass','generatedLoad')
 
-                reach_template.add_link(OWLink(bank_erosion,'bankErosionCoarse',transport_node,'lateralLoad'))
+                reach_template.add_link(OWLink(bank_erosion,'bankErosionCoarse',transport_node,'incomingMass'))
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
 
             elif model_type == n.InstreamDissolvedNutrientDecay:
@@ -292,7 +292,7 @@ class DynamicSednetCatchment(object):
 
             runoff_node = runoff_template.add_node(self.model_for(self.rr,hru,*tag_values),process='RR',hru=hru,**kwargs)
             runoff_template.define_output(runoff_node,'runoff')
-            runoff_template.define_output(runoff_node,'quickflow')
+            runoff_template.define_output(runoff_node,'surfaceRunoff','quickflow')
             runoff_template.define_output(runoff_node,'baseflow')
             hru_template = OWTemplate('hru:%s'%hru)
             hru_template.nest(runoff_template)
