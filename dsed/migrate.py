@@ -377,6 +377,17 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   gully_parameters = ParameterTableAssignment(fine_sediment_params,node_types.DynamicSednetGully,dim_columns=['catchment','cgu'])
   model._parameteriser.append(usle_parameters)
 
+  emc_dwc = load_csv('cg-RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel')
+  emc_dwc = emc_dwc.rename(columns={
+      'Catchment':'catchment',
+      'Functional Unit':'cgu',
+      'Constituent':'constituent',
+      'eventMeanConcentration':'EMC',
+      'dryMeanConcentration':'DWC'
+  })
+  emc_parameteriser = ParameterTableAssignment(emc_dwc,node_types.EmcDwc,dim_columns=['catchment','cgu','constituent'],complete=False)
+  model._parameteriser.append(emc_parameteriser)
+
   model._parameteriser = p
 
   return model, meta, network
