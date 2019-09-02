@@ -121,7 +121,7 @@ def extract_source_config(v,dest,progress=print):
 
     write_csv('cgmodels',generation_models)
     write_csv('routing_models',link_models)
-    write_csv('routing_models',link_models)
+    write_csv('routing_params',link_params)
     write_csv('transportmodels',transport_models)
 
     for model_type, table in transport_params.items():
@@ -293,7 +293,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   runoff_parameteriser = ParameterTableAssignment(sacramento_parameters,RR,dim_columns=['catchment','hru'])
   p._parameterisers.append(runoff_parameteriser)
 
-  routing_params = load_csv('routing')
+  routing_params = load_csv('routing_params')
   routing_params.replace(link_renames,inplace=True)
   routing_params['catchment'] = routing_params.NetworkElement.str.slice(19)
   routing_parameteriser = ParameterTableAssignment(routing_params,ROUTING,dim_columns=['catchment'])
