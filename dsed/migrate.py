@@ -91,6 +91,10 @@ def extract_source_config(v,dest,progress=print):
     usle_ts = v.data_source('USLE Data')
     usle_timeseries = usle_ts['Items'][0]['Details']
     
+    progress('Getting gully timeseries')
+    gully_ts = v.data_source('Gully Data')
+    gully_timeseries = gully_ts['Items'][0]['Details']
+
     progress('Getting cropping metadata')
     cropping_ts = get_big_data_source(v,'Cropping Data',data_sources,progress)
 
@@ -109,6 +113,7 @@ def extract_source_config(v,dest,progress=print):
     write_csv('runoff_params',runoff_parameters)
     write_csv('climate',climate)
     write_csv('usle_timeseries',usle_timeseries)
+    write_csv('gully_timeseries',gully_timeseries)
     write_csv('cropping',cropping_ts)
 
     for model_type, table in generation_parameters.items():
