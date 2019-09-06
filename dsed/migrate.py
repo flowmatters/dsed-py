@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 from scipy import stats
+from functools import reduce
 
 from dsed.ow import DynamicSednetCatchment
 
@@ -23,12 +24,14 @@ from openwater.results import OpenwaterResults
 
 from veneer.actions import get_big_data_source
 import veneer
+from veneer.general import _extend_network
 
 SQKM_TO_SQM = 1000*1000
 M2_TO_HA = 1e-4
 PER_SECOND_TO_PER_DAY=86400
 PER_DAY_TO_PER_SECOND=1/PER_SECOND_TO_PER_DAY
 G_TO_KG=1e-3
+TONS_TO_KG=1e3
 
 def nop(*args,**kwargs):
     pass
@@ -187,6 +190,9 @@ def extract_source_results(v,dest,progress=print,start=None,end=None):
     download_constituent_outputs('Downstream Flow Mass','network')
     download_constituent_outputs('Total Flow Mass','generation',veneer.name_for_fu_and_sc)
 
+def _rename_tag_columns(dataframe):
+    return dataframe.rename(columns={'Catchment':'catchment','Functional Unit':'cgu','Constituent':'constituent'})
+
 def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
                    link_renames={},
                    progress=print):
@@ -198,6 +204,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
     return pd.read_csv(os.path.join(data_path,f+'.csv'),index_col=0,parse_dates=True)
 
   network = gpd.read_file(os.path.join(data_path,'network.json'))
+  network_veneer = _extend_network(load_json('network'))
 
   time_period = pd.date_range(start,end)
   meta['start'] = start
@@ -242,6 +249,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
 
   pesticides = [c for c in constituents if not c in dissolved_nutrients+particulate_nutrients+sediments]
   meta['pesticides'] = pesticides
+  meta['pesticide_cgus'] = list(pesticide_cgus)
 
   catchment_template = DynamicSednetCatchment(dissolved_nutrients=[],  #dissolved_nutrients,
                                               particulate_nutrients=[], #particulate_nutrients,
@@ -300,7 +308,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   p._parameterisers.append(routing_parameteriser)
 
   dwcs = load_csv('cg-GBR_DynSed_Extension.Models.GBR_Pest_TSLoad_Model')
-  dwcs = dwcs.rename(columns={'Catchment':'catchment','Functional Unit':'cgu','Constituent':'constituent'})
+  dwcs = _rename_tag_columns(dwcs)
 
   dwcs['particulate_scale'] = 0.01 * dwcs['DeliveryRatio'] * 0.01 * dwcs['Fine_Percent']
   dwcs['dissolved_scale'] = 0.01 * dwcs['DeliveryRatioDissolved']
@@ -311,7 +319,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   scaled_cropping_ts = {}
   for col in cropping.columns:
       constituent, variable, catchment, cgu = col.split('$')
-      if variable != 'Dissolved_Load_g_per_Ha' and variable != 'Particulate_Load_g_per_Ha':
+      if not variable in ['Dissolved_Load_g_per_Ha','Particulate_Load_g_per_Ha']:
           continue
       
       row = dwcs[dwcs.catchment==catchment]
@@ -326,39 +334,47 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   scaled_cropping = pd.DataFrame(scaled_cropping_ts)
 
   combined_cropping_ts = {}
+  cropping_cgus = []
   for col in scaled_cropping.columns:
       constituent, variable, catchment, cgu = col.split('$')
+      cropping_cgus.append(cgu)
       if variable != 'Dissolved_Load_g_per_Ha': 
           continue
       #  and variable != 'Particulate_Load_g_per_Ha':
       dis_col = col
       part_col = '%s$Particulate_Load_g_per_Ha$%s$%s'%(constituent,catchment,cgu)
-      comb_col = '%s$Combined_Load_g_per_Ha$%s$%s'%(constituent,catchment,cgu)
+      comb_col = '%s$Combined_Load_kg_per_m2_per_s%s$%s'%(constituent,catchment,cgu)
       combined_cropping_ts[comb_col] = scaled_cropping[dis_col] + scaled_cropping[part_col]
   combined_cropping = pd.DataFrame(combined_cropping_ts)
-
+  combined_cropping *= M2_TO_HA * PER_DAY_TO_PER_SECOND * G_TO_KG
+  meta['cropping_cgus'] = list(set(cropping_cgus))
+  print(combined_cropping.describe().transpose().describe())
   # Particulate_Load_g_per_Ha or Dissolved_Load_g_per_Ha
-  cropping_inputs.inputter(combined_cropping,'inputLoad','${constituent}$$Combined_Load_g_per_Ha$$${catchment}$$${cgu}')
+  cropping_inputs.inputter(combined_cropping,'inputLoad','${constituent}$$Combined_Load_kg_per_m2_per_s$$${catchment}$$${cgu}')
+
+  crop_sed = cropping[[c for c in cropping.columns if 'Soil_Load_T_per_Ha' in c]]
+  crop_sed *= M2_TO_HA * PER_DAY_TO_PER_SECOND * TONS_TO_KG
+  print(crop_sed.describe().transpose().describe())
+  cropping_inputs.inputter(crop_sed,'inputLoad','${constituent}$$Soil_Load_T_per_Ha$$${catchment}$$${cgu}')
+
   # TODO NEED TO SCALE BY AREA!
   p._parameterisers.append(cropping_inputs)
 
-  fu_areas_scaled = fu_areas * M2_TO_HA * PER_DAY_TO_PER_SECOND * G_TO_KG
-  cropping_ts_scaling = ParameterTableAssignment(fu_areas_scaled,'PassLoadIfFlow','scalingFactor','cgu','catchment')
+#  fu_areas_scaled = fu_areas
+  cropping_ts_scaling = ParameterTableAssignment(fu_areas,'PassLoadIfFlow','scalingFactor','cgu','catchment')
   p._parameterisers.append(cropping_ts_scaling)
 
   usle_timeseries = load_csv('usle_timeseries').reindex(time_period)
   usle_timeseries = usle_timeseries.fillna(method='ffill')
   fine_sediment_params = load_csv('cg-Dynamic_SedNet.Models.SedNet_Sediment_Generation')
-  assert len(set(fine_sediment_params.Constituent))==1
   assert set(fine_sediment_params.useAvModel) == {False}
+  assert len(set(fine_sediment_params.Constituent))==1
   fine_sediment_params = fine_sediment_params.rename(columns={
       'Max_Conc':'maxConc',
       'USLE_HSDR_Fine':'usleHSDRFine',
-      'USLE_HSDR_Coarse':'usleHSDRCoarse',
-      'Catchment':'catchment',
-      'Functional Unit':'cgu',
-      'Constituent':'constituent'
+      'USLE_HSDR_Coarse':'usleHSDRCoarse'
   })
+  fine_sediment_params = _rename_tag_columns(fine_sediment_params)
 
   fine_sediment_params = fine_sediment_params.rename(columns={c:c.replace('_','') for c in fine_sediment_params.columns})
   usle_parameters = ParameterTableAssignment(fine_sediment_params,node_types.USLEFineSedimentGeneration,dim_columns=['catchment','cgu'])
@@ -370,6 +386,13 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   usle_timeseries_inputs.inputter(usle_timeseries,'CovOrCFact','C-Factor For ${catchment} ${cgu}')
   model._parameteriser.append(usle_timeseries_inputs)
 
+  usle_fu_areas_parameteriser = ParameterTableAssignment(fu_areas,node_types.USLEFineSedimentGeneration,'area','cgu','catchment')
+  p._parameterisers.append(usle_fu_areas_parameteriser)
+
+  gbr_crop_sed_params = load_csv('cg-GBR_DynSed_Extension.Models.GBR_CropSed_Wrap_Model')
+  gbr_crop_sed_params = _rename_tag_columns(gbr_crop_sed_params)
+  fine_sediment_params = pd.concat([fine_sediment_params,gbr_crop_sed_params],sort=False)
+
   fine_sediment_params = fine_sediment_params.rename(columns={
       'GullyYearDisturb':'YearDisturbance',
       'AverageGullyActivityFactor':'averageGullyActivityFactor',
@@ -380,7 +403,21 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   # Area, AnnualRunoff, GullyAnnualAverageSedimentSupply, annualLoad, longtermRunoffFactor
   # dailyRunoffPowerFactor
   gully_parameters = ParameterTableAssignment(fine_sediment_params,node_types.DynamicSednetGully,dim_columns=['catchment','cgu'])
-  model._parameteriser.append(usle_parameters)
+  model._parameteriser.append(gully_parameters)
+
+  gully_timeseries = load_csv('gully_timeseries').reindex(time_period)
+  gully_inputs = DataframeInputs()
+  gully_ts_columns = ['Annual Load', 'Annual Runoff']
+  gully_ts_destinations = ['annualLoad','AnnualRunoff']
+  for col, input_name in zip(gully_ts_columns,gully_ts_destinations):
+    gully_inputs.inputter(gully_timeseries,input_name,'%s For ${catchment} ${cgu}')
+
+  p._parameterisers.append(gully_inputs)
+
+
+  gully_fu_areas_parameteriser = ParameterTableAssignment(fu_areas,node_types.DynamicSednetGully,
+                                                          'Area','cgu','catchment')
+  p._parameterisers.append(gully_fu_areas_parameteriser)
 
   emc_dwc = load_csv('cg-RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel')
   emc_dwc = emc_dwc.rename(columns={
@@ -393,19 +430,67 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   emc_parameteriser = ParameterTableAssignment(emc_dwc,node_types.EmcDwc,dim_columns=['catchment','cgu','constituent'],complete=False)
   model._parameteriser.append(emc_parameteriser)
 
+  gbr_crop_sed_params = gbr_crop_sed_params.rename(columns={
+      'Catchment':'catchment',
+      'Functional Unit':'cgu',
+  })
+
+  crop_sed_fine_dwcs = gbr_crop_sed_params[['catchment','cgu','HillslopeFineDWC','HillslopeFineSDR']]
+  crop_sed_fine_dwcs['DWC'] = crop_sed_fine_dwcs['HillslopeFineDWC'] * 0.01 * crop_sed_fine_dwcs['HillslopeFineSDR']
+  crop_sed_fine_dwcs['constituent'] = 'Sediment - Fine'
+  crop_sed_fine_dwc_parameteriser = ParameterTableAssignment(crop_sed_fine_dwcs,node_types.EmcDwc,
+                                                             dim_columns=['catchment','cgu','constituent'],complete=False)
+  model._parameteriser.append(crop_sed_fine_dwc_parameteriser)
+
+  crop_sed_coarse_dwcs = gbr_crop_sed_params[['catchment','cgu','HillslopeCoarseDWC','HillslopeCoarseSDR']]
+  crop_sed_coarse_dwcs['DWC'] = crop_sed_coarse_dwcs['HillslopeCoarseDWC'] * 0.01 * crop_sed_coarse_dwcs['HillslopeCoarseSDR']
+  crop_sed_coarse_dwcs['constituent'] = 'Sediment - Coarse'
+  crop_sed_coarse_dwc_parameteriser = ParameterTableAssignment(crop_sed_fine_dwcs,node_types.EmcDwc,
+                                                               dim_columns=['catchment','cgu','constituent'],complete=False)
+  model._parameteriser.append(crop_sed_coarse_dwc_parameteriser)
+
+#   lag_parameters = ParameterTableAssignment(lag_outlet_links(network_veneer),node_types.Lag,dim_columns=['catchment'],complete=False)
+  lag_parameters = ParameterTableAssignment(lag_non_routing_links(routing_params),node_types.Lag,dim_columns=['catchment'],complete=False)
+  model._parameteriser.append(lag_parameters)
+
   model._parameteriser = p
 
   return model, meta, network
 
+def lag_outlet_links(network):
+    outlets = [n['properties']['id'] for n in network.outlet_nodes()]
+    links_to_outlets = reduce(lambda x,y: list(x) + list(y), 
+                              [network['features'].find_by_to_node(n) for n in outlets])
+    single_link_networks = [l for l in links_to_outlets if len(network.upstream_links(l))==0]
+    outlet_links = [l['properties']['name'] for l in single_link_networks]
+    print('Outlet links',len(outlet_links),outlet_links)
+    return lag_links(outlet_links)
+
+def lag_links(links):
+    return pd.DataFrame([{'catchment':l.replace('link for catchment ',''),'timeLag':1} for l in links])
+
+def lag_headwater_links(network):
+    links = network['features'].find_by_feature_type('link')
+    headwater_links = [l for l in links if len(network.upstream_links(l))==0]
+    headwater_link_names = [l['properties']['name'] for l in headwater_links]
+    print('Headwater links',len(headwater_link_names),headwater_link_names)
+    return lag_links(headwater_link_names)
+
+def lag_non_routing_links(params):
+    RC_THRESHOLD=1e-5
+    links_to_lag = list(params[params.RoutingConstant<RC_THRESHOLD].catchment)
+    print('Links to lag',len(links_to_lag),links_to_lag)
+    return lag_links(links_to_lag)
+
 class SourceOWComparison(object):
-    def __init__(self,meta,ow_model_fn,ow_results_fn,source_results_path,catchments):
+    def __init__(self,meta,ow_results,source_results_path,catchments):
         self.meta = meta
-        self.ow_model_fn = ow_model_fn
-        self.ow_results_fn = ow_results_fn
+        # self.ow_model_fn = ow_model_fn
+        # self.ow_results_fn = ow_results_fn
         self.source_results_path = source_results_path
         self.time_period = pd.date_range(self.meta['start'],self.meta['end'])
         self.catchments = catchments
-        self.results = OpenwaterResults(ow_model_fn,ow_results_fn,self.time_period)
+        self.results = ow_results
 
         self.comparison_flows = None
         self.link_outflow = None
@@ -423,7 +508,7 @@ class SourceOWComparison(object):
         self.comparison_flows = self.comparison_flows.rename(columns={c:c.replace('link for catchment ','') for c in self.comparison_flows.columns})
         self.comparison_flows = self.comparison_flows / 86400.0
 
-    def comparable_flows(self,sc):
+    def comparable_flows(self,sc,time_period=None):
         self._load_flows()
 
         if not sc in self.comparison_flows.columns or not sc in self.link_outflow.columns:
@@ -434,6 +519,8 @@ class SourceOWComparison(object):
         common = orig.index.intersection(ow.index)
         orig = orig[common]
         ow = ow[common]
+        if time_period is not None:
+            return orig[time_period],ow[time_period]
         return orig,ow
 
     def compare_flow(self,sc):
@@ -448,9 +535,9 @@ class SourceOWComparison(object):
         self._load_flows()
         return pd.Series([self.compare_flow(c) for c in self.link_outflow.columns],index=self.link_outflow.columns)
 
-    def plot_flows(self,sc):
+    def plot_flows(self,sc,time_period=None):
         import matplotlib.pyplot as plt
-        orig, ow = self.comparable_flows(sc)
+        orig, ow = self.comparable_flows(sc,time_period)
         plt.figure()
         orig.plot(label='orig')
         ow.plot(label='ow')
@@ -490,16 +577,19 @@ class SourceOWComparison(object):
                 fu_comparison = comparison[comparison_columns]
                 if ow.sum().sum()==0 and fu_comparison.sum().sum()==0:
                     for sc in ow.columns:
-                        errors.append({'catchment':sc,'cgu':fu,'constituent':c,'ssquares':0,'sum-ow':0,'sum-orig':0})
+                        errors.append({'catchment':sc,'cgu':fu,'constituent':c,'ssquares':0,
+                                       'sum-ow':0,'sum-orig':0,'r-squared':1})
                 else:
                     for sc in ow.columns:
-                        res = {'catchment':sc,'cgu':fu,'constituent':c,'ssquares':0,'sum-ow':0,'sum-orig':0}
+                        res = {'catchment':sc,'cgu':fu,'constituent':c,'ssquares':0,'r-squared':1,'sum-ow':0,'sum-orig':0}
                         ow_sc = ow[sc]
                         orig_sc = fu_comparison['%s: %s'%(fu,sc)]
                         if ow_sc.sum()>0 or orig_sc.sum()>0:
                             orig_scaled = (orig_sc*86400)
                             ow_scaled = (ow_sc*86400)
                             res['ssquares'] = sum_squares(orig_scaled,ow_scaled)
+                            _,_,r_value,_,_ = stats.linregress(orig_scaled,ow_scaled)
+                            res['r-squared'] = r_value**2
                             res['sum-ow'] = ow_scaled.sum()
                             res['sum-orig'] = orig_scaled.sum()
                         errors.append(res)

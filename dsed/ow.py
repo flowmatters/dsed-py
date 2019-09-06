@@ -85,8 +85,8 @@ class HydrologicalResponseUnit(object):
     pass
 
 class DynamicSednetCGU(object):
-    def __init__(self,generate_pesticides=True,erosion_processes=True,sediment_fallback_model=False):
-        self.generate_pesticides = generate_pesticides
+    def __init__(self,cropping_cgu=True,erosion_processes=True,sediment_fallback_model=False):
+        self.cropping_cgu = cropping_cgu
         self.erosion_processes = erosion_processes
         self.sediment_fallback_model = sediment_fallback_model
         assert (not bool(erosion_processes)) or (not bool(sediment_fallback_model))
@@ -147,7 +147,8 @@ class DynamicSednetCGU(object):
             template.add_link(OWLink(baseflow_scale_node,'outflow',gen_node,'baseflow'))
             template.define_output(gen_node,'totalLoad','generatedLoad')
 
-        if self.generate_pesticides:
+        if self.cropping_cgu:
+
             for con in catchment_template.pesticides:
                 dwc_node = template.add_node(n.EmcDwc,process='ConstituentDryWeatherGeneration',constituent=con,**kwargs)
                 template.add_link(OWLink(quickflow_scale_node,'outflow',dwc_node,'quickflow'))
@@ -161,6 +162,30 @@ class DynamicSednetCGU(object):
                 template.add_link(OWLink(ts_node,'outputLoad',sum_node,'i2'))
 
                 template.define_output(sum_node,'out','generatedLoad')
+
+            # Gully
+            gully_gen = template.add_node(n.DynamicSednetGully,process="GullyGeneration",**kwargs)
+            template.add_link(OWLink(quickflow_scale_node,'outflow',gully_gen,'quickflow'))
+
+            dwc_node = template.add_node(n.EmcDwc,process='ConstituentDryWeatherGeneration',constituent=FINE_SEDIMENT,**kwargs)
+            template.add_link(OWLink(quickflow_scale_node,'outflow',dwc_node,'quickflow'))
+            template.add_link(OWLink(baseflow_scale_node,'outflow',dwc_node,'baseflow'))
+
+            ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=FINE_SEDIMENT,**kwargs)
+            template.add_link(OWLink(runoff_scale_node,'outflow',ts_node,'flow'))
+
+            fine_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=FINE_SEDIMENT,**kwargs)
+            coarse_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=COARSE_SEDIMENT,**kwargs)
+
+            # TODO Need a coarse DWC as well.
+
+            template.add_link(OWLink(dwc_node,'totalLoad',fine_sum,'i1'))
+            template.add_link(OWLink(ts_node,'outputLoad',fine_sum,'i1'))
+            template.add_link(OWLink(gully_gen,'fineLoad',fine_sum,'i2'))
+
+            template.add_link(OWLink(gully_gen,'coarseLoad',coarse_sum,'i2'))
+            template.define_output(fine_sum,'out','generatedLoad')
+            template.define_output(coarse_sum,'out','generatedLoad')
 
         return template
 
@@ -220,9 +245,13 @@ class DynamicSednetCatchment(object):
         tag_values = list(kwargs.values())
         reach_template = OWTemplate('reach')
 
+        lag_node = reach_template.add_node(n.Lag,process='FlowLag',**kwargs)
+        reach_template.define_input(lag_node,'inflow','lateral')
+
         routing_node = reach_template.add_node(self.routing,process='FlowRouting',**kwargs)
-        reach_template.define_input(routing_node,'lateral')
+        reach_template.add_link(OWLink(lag_node,'outflow',routing_node,'lateral'))
         reach_template.define_output(routing_node,'outflow')
+
         transport = {}
 
         bank_erosion = reach_template.add_node(n.BankErosion,process='BankErosion',**kwargs)
@@ -268,7 +297,7 @@ class DynamicSednetCatchment(object):
         return reach_template
 
     def cgu_factory(self,cgu):
-        gen_pesticides = (self.pesticide_cgus is None) or (cgu in self.pesticide_cgus)
+        cropping_cgu = (self.pesticide_cgus is not None) and (cgu in self.pesticide_cgus)
         erosion_proc = (self.erosion_cgus is None) or (cgu in self.erosion_cgus)
         emc_proc = False
         if self.sediment_fallback_cgu is not None:
@@ -278,7 +307,7 @@ class DynamicSednetCatchment(object):
             return NilCGU()
         # if cgu in ['Dryland', 'Irrigation', 'Horticulture', 'Irrigated Grazing']:
         #     return DynamicSednetAgCGU()
-        return DynamicSednetCGU(generate_pesticides=gen_pesticides,
+        return DynamicSednetCGU(cropping_cgu=cropping_cgu,
                                 erosion_processes=erosion_proc,
                                 sediment_fallback_model=emc_proc)
 
@@ -326,7 +355,7 @@ class DynamicSednetCatchment(object):
 
             src_model = graph.nodes[src_node][TAG_MODEL]
             dest_model = graph.nodes[dest_node][TAG_MODEL]
-            src = STANDARD_LINKS[src_model][0] or src
-            dest = STANDARD_LINKS[dest_model][1] or dest
+            src = STANDARD_LINKS[src_model][1] or src
+            dest = STANDARD_LINKS[dest_model][0] or dest
             # print(src_node,src,dest_node,dest)
             graph.add_edge(src_node,dest_node,src=[src],dest=[dest])
