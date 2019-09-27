@@ -151,7 +151,10 @@ def extract_source_results(v,dest,progress=print,start=None,end=None):
     constituents = v.model.get_constituents()
     recorders = [
         {'RecordingElement':'Downstream Flow Volume'},
-        {'RecordingElement':'Upstream Flow Volume'}
+        {'RecordingElement':'Upstream Flow Volume'},
+        {'RecordingVariable':'Quick Flow'},
+        {'RecordingVariable':'Slow Flow'},
+        {'RecordingVariable':'Total Flow'},
     ]
     recorders += [{'RecordingVariable':'Constituents@%s@Downstream Flow Mass'%c} for c in constituents]
     recorders += [{'RecordingVariable':'Constituents@%s@Total Flow Mass'%c} for c in constituents]
@@ -176,6 +179,13 @@ def extract_source_results(v,dest,progress=print,start=None,end=None):
 
     write_csv('upstream_vol',upstream)
     write_csv('downstream_vol',downstream)
+
+    runoff = v.retrieve_multiple_time_series(run_data=r,criteria={'RecordingVariable':'Quick Flow'},name_fn=veneer.name_for_fu_and_sc)
+    baseflow = v.retrieve_multiple_time_series(run_data=r,criteria={'RecordingVariable':'Slow Flow'},name_fn=veneer.name_for_fu_and_sc)
+    totalflow = v.retrieve_multiple_time_series(run_data=r,criteria={'RecordingVariable':'Total Flow'},name_fn=veneer.name_for_fu_and_sc)
+    write_csv('runoff',runoff)
+    write_csv('baseflow',baseflow)
+    write_csv('totalflow',totalflow)
 
     def download_constituent_outputs(suffix,fn_suffix,name_fn=veneer.name_for_location):
         constituent_variables = [v for v in variables if v.startswith('Constituents@') and v.endswith(suffix)]
