@@ -36,6 +36,8 @@ G_TO_KG=1e-3
 TONS_TO_KG=1e3
 PERCENT_TO_FRACTION=1e-2
 
+SOURCE_EMC_MODEL='RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel'
+
 def nop(*args,**kwargs):
     pass
 
@@ -261,7 +263,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   fine_sed_cg = cg_models[cg_models.Constituent=='Sediment - Fine']
   fine_sed_cg = dict(zip(fine_sed_cg['Functional Unit'],fine_sed_cg.model))
   erosion_cgus = [fu for fu,model in fine_sed_cg.items() if model == 'Dynamic_SedNet.Models.SedNet_Sediment_Generation']
-  emc_cgus = [fu for fu,model in fine_sed_cg.items() if model == 'RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel']
+  emc_cgus = [fu for fu,model in fine_sed_cg.items() if model == SOURCE_EMC_MODEL]
   meta['erosion_cgus'] = erosion_cgus
 
   cr_models = load_csv('transportmodels')
@@ -510,7 +512,7 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
                                                           'Area','cgu','catchment')
   p._parameterisers.append(gully_fu_areas_parameteriser)
 
-  emc_dwc = load_csv('cg-RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel')
+  emc_dwc = load_csv('cg-'+SOURCE_EMC_MODEL)
   emc_dwc = emc_dwc.rename(columns={
       'Catchment':'catchment',
       'Functional Unit':'cgu',
