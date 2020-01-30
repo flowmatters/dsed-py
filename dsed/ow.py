@@ -354,6 +354,7 @@ class DynamicSednetCatchment(object):
         reach_template.define_output(routing_node,'outflow')
 
         bank_erosion = reach_template.add_node(n.BankErosion,process='BankErosion',**kwargs)
+        reach_template.add_link(OWLink(routing_node,'storage',bank_erosion,'totalVolume'))
         reach_template.add_link(OWLink(routing_node,'outflow',bank_erosion,'downstreamFlowVolume'))
 
         dis_nut_models = []
@@ -369,6 +370,7 @@ class DynamicSednetCatchment(object):
                 # reach_template.define_input(transport_node,'incomingMass','generatedLoad')
                 reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'incomingMass'))
                 reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
+                reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
 
                 reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'incomingMass'))
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
@@ -386,6 +388,7 @@ class DynamicSednetCatchment(object):
                 # reach_template.define_input(transport_node,'incomingMassLateral','generatedLoad')
                 reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'incomingMassLateral'))
                 reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
+                reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
 
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
 #            elif model_type == n.InstreamParticulateNutrient: TODO
@@ -393,7 +396,7 @@ class DynamicSednetCatchment(object):
                 # Lumped constituent routing
                 # reach_template.define_input(transport_node,'lateralLoad','generatedLoad')
                 reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'lateralLoad'))
-                reach_template.add_link(OWLink(lag_node,'outflow',transport_node,'inflow'))
+                # reach_template.add_link(OWLink(lag_node,'outflow',transport_node,'inflow')) # inflow removed from LumpedConstituentRouting. Unused
                 reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
                 reach_template.add_link(OWLink(routing_node,'storage',transport_node,'storage'))
                 reach_template.define_output(transport_node,'outflowLoad')
