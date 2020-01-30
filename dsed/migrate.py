@@ -759,7 +759,7 @@ class SourceOWComparison(object):
         if c in self.meta['pesticides']:
             return LCR
         if c in self.meta['dissolved_nutrients']:
-            return LCR
+            return 'InstreamDissolvedNutrientDecay', 'loadDownstream'
         if c in self.meta['particulate_nutrients']:
             return LCR
         if c == 'Sediment - Coarse':
