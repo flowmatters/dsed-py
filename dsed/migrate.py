@@ -610,6 +610,42 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   lag_parameters = ParameterTableAssignment(lag_non_routing_links(routing_params),node_types.Lag,dim_columns=['catchment'],complete=False)
   model._parameteriser.append(lag_parameters)
 
+  instream_fine_sediment_params = _rename_link_tag_columns(load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_Fine_Sediment_Model'),link_renames,'Link')
+  link_attributes = instream_fine_sediment_params[['catchment','LinkLength_M','LinkHeight_M','LinkWidth_M']].set_index('catchment')
+  link_attributes = link_attributes.rename(columns={'LinkLength_M':'linkLength','LinkHeight_M':'linkHeight','LinkWidth_M':'linkWidth'})
+
+  instream_nutrient_params = _rename_link_tag_columns(load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_DissolvedNut_Model'),link_renames,'Link')
+  instream_nutrient_params['uptakeVelocity'] = instream_nutrient_params['UptakeVelocity']
+  instream_nutrient_params = instream_nutrient_params.set_index('catchment')
+  instream_nutrient_params = instream_nutrient_params.join(link_attributes,how='inner').reset_index()
+#   print(instream_nutrient_params)
+  instream_nutrient_parameteriser = ParameterTableAssignment(instream_nutrient_params,'InstreamDissolvedNutrientDecay',dim_columns=['catchment'])
+  p._parameterisers.append(instream_nutrient_parameteriser)
+
+  instream_fine_sediment_params = instream_fine_sediment_params.rename(columns={
+      'BankFullFlow':'bankFullFlow',
+      'BankHeight_M':'bankHeight',
+      'FloodPlainArea_M2':'floodPlainArea',
+    #   'LinkHeight_M':'bankHeight',
+      'LinkLength_M':'linkLength',
+      'LinkWidth_M':'linkWidth',
+      'Link_Slope':'linkSlope',
+      'LongTermAvDailyFlow':'longTermAvDailyFlow',
+      'ManningsN':'manningsN',
+      'RiparianVegPercent':'riparianVegPercent',
+      'SoilErodibility':'soilErodibility',
+      'SoilPercentFine':'soilPercentFine',
+    #   'annualReturnInterval':'',
+    #   'contribArea_Km':'',
+      'initFineChannelStorProp':'channelStoreFine'
+  })
+  instream_fine_sediment_params['channelStoreFine'] = - instream_fine_sediment_params['channelStoreFine']
+
+  instream_fine_sed_parameteriser = ParameterTableAssignment(instream_fine_sediment_params,'InstreamFineSediment',dim_columns=['catchment'])
+  p._parameterisers.append(instream_fine_sed_parameteriser)
+  bank_erosion_parameteriser = ParameterTableAssignment(instream_fine_sediment_params,'BankErosion',dim_columns=['catchment'])
+  p._parameterisers.append(bank_erosion_parameteriser)
+
   model._parameteriser = p
 
   return model, meta, network
