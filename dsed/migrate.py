@@ -230,6 +230,13 @@ def extract_source_results(v,dest,progress=print,start=None,end=None):
 def _rename_tag_columns(dataframe):
     return dataframe.rename(columns={'Catchment':'catchment','Functional Unit':'cgu','Constituent':'constituent'})
 
+def _rename_link_tag_columns(dataframe,link_renames,link_col='NetworkElement'):
+  dataframe = dataframe.replace(link_renames)
+  dataframe = dataframe.rename(columns={'Constituent':'constituent'})
+  dataframe['catchment'] = dataframe[link_col].str.slice(19)
+
+  return dataframe
+
 def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
                    link_renames={},
                    progress=print):
@@ -353,16 +360,13 @@ def build_ow_model(data_path,start='1986/07/01',end='2014/06/30',
   fu_areas_parameteriser = ParameterTableAssignment(fu_areas,'DepthToRate','area','cgu','catchment')
   p._parameterisers.append(fu_areas_parameteriser)
 
-
   sacramento_parameters = load_csv('runoff_params')
   sacramento_parameters['hru'] = sacramento_parameters['Functional Unit']
   sacramento_parameters = sacramento_parameters.rename(columns={c:c.lower() for c in sacramento_parameters.columns})
   runoff_parameteriser = ParameterTableAssignment(sacramento_parameters,RR,dim_columns=['catchment','hru'])
   p._parameterisers.append(runoff_parameteriser)
 
-  routing_params = load_csv('routing_params')
-  routing_params.replace(link_renames,inplace=True)
-  routing_params['catchment'] = routing_params.NetworkElement.str.slice(19)
+  routing_params = _rename_link_tag_columns(load_csv('routing_params'),link_renames)
   routing_parameteriser = ParameterTableAssignment(routing_params,ROUTING,dim_columns=['catchment'])
   p._parameterisers.append(routing_parameteriser)
 
