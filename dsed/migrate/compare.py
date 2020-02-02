@@ -1,0 +1,266 @@
+import os
+import numpy as np
+import pandas as pd
+
+def sum_squares(l1,l2):
+    return sum((np.array(l1)-np.array(l2))**2)
+
+class SourceOWComparison(object):
+    def __init__(self,meta,ow_results,source_results_path,catchments):
+        self.meta = meta
+        # self.ow_model_fn = ow_model_fn
+        # self.ow_results_fn = ow_results_fn
+        self.source_results_path = source_results_path
+        self.time_period = pd.date_range(self.meta['start'],self.meta['end'])
+        self.catchments = catchments
+        self.results = ow_results
+
+        self.comparison_flows = None
+        self.link_outflow = None
+        self.source_timeseries_cache = {}
+
+    def _load_csv(self,f):
+        return pd.read_csv(os.path.join(self.source_results_path,f.replace(' ','')+'.csv'),index_col=0,parse_dates=True)
+
+    def _load_flows(self):
+        if self.comparison_flows is not None:
+            return
+
+        routing = 'StorageRouting'
+        self.link_outflow = self.results.time_series(routing,'outflow','catchment')
+        self.comparison_flows = self.get_source_timeseries('downstream_vol')
+        self.comparison_flows = self.comparison_flows.rename(columns={c:c.replace('link for catchment ','') for c in self.comparison_flows.columns})
+        self.comparison_flows = self.comparison_flows / 86400.0
+
+    def plot_flows(self,sc,time_period=None):
+        import matplotlib.pyplot as plt
+        orig, ow = self.comparable_flows(sc,time_period)
+        plt.figure()
+        orig.plot(label='orig')
+        ow.plot(label='ow')
+        plt.legend()
+
+        plt.figure()
+        plt.scatter(orig,ow)
+
+    def generation_model(self,c,fu):
+        EMC = 'EmcDwc','totalLoad'
+        SUM = 'Sum','out'
+
+        if c in self.meta['sediments']:
+            if fu in self.meta['erosion_cgus']:
+                return SUM
+            if fu in self.meta['cropping_cgus']:
+                return SUM
+            return EMC
+
+        if c in self.meta['pesticides']:
+            return SUM
+
+        if c in self.meta['dissolved_nutrients']:
+            if fu in ['Water','Conservation','Horticulture','Other','Urban','Forestry']:
+                return EMC
+
+            if fu == 'Sugarcane':
+                if c=='N_DIN':
+                    return SUM
+                elif c=='N_DON':
+                    return EMC
+                elif c.startswith('P'):
+                    return EMC
+
+            if fu in self.meta['cropping_cgus']:
+                if c.startswith('P'):
+                    return 'PassLoadIfFlow', 'outputLoad'
+
+            return 'SednetDissolvedNutrientGeneration', 'totalLoad'
+
+        if c in self.meta['particulate_nutrients']:
+            if (fu in self.meta['cropping_cgus']) and (fu != 'Sugarcane') and (c == 'P_Particulate'):
+                return SUM
+
+            if fu in self.meta['erosion_cgus'] or fu in self.meta['cropping_cgus']:
+                return 'SednetParticulateNutrientGeneration', 'totalLoad'
+
+        return EMC
+
+    def transport_model(self,c):
+        LCR = 'LumpedConstituentRouting','outflowLoad'
+        if c in self.meta['pesticides']:
+            return LCR
+        if c in self.meta['dissolved_nutrients']:
+            return 'InstreamDissolvedNutrientDecay', 'loadDownstream'
+        if c in self.meta['particulate_nutrients']:
+            return LCR
+        if c == 'Sediment - Coarse':
+            return 'InstreamCoarseSediment', 'loadDownstream'
+        if c == 'Sediment - Fine':
+            return 'InstreamFineSediment', 'loadDownstream'
+        assert False
+
+    def get_source_timeseries(self,fn):
+        if not fn in self.source_timeseries_cache:
+            self.source_timeseries_cache[fn] = self._load_csv('Results/%s'%fn).reindex(self.time_period)
+        return self.source_timeseries_cache[fn]
+
+    def get_generation(self,constituent,catchment,fu):
+        from_source = self.get_source_timeseries('%sgeneration'%constituent)
+
+        model,output = self.generation_model(constituent,fu)
+        # print('OW results in %s.%s'%(model,output))
+        from_ow = self.results.time_series(model,output,'catchment',cgu=fu,constituent=constituent)
+
+        comparison_column = '%s: %s'%(fu,catchment)
+        return from_source[comparison_column], from_ow[catchment]
+
+    def compare_fu_level_results(self,elements,s_pattern,ow_fn,tag,progress=print):
+        errors = []
+        for e in elements:
+            progress(e)
+            comparison = self.get_source_timeseries(s_pattern%e)
+
+            for fu in self.meta['fus']:
+                # model,output = ow_fn(e,fu)
+                # ts_tags = {
+                #     'cgu':fu
+                # }
+                # ts_tags[tag]=e
+                # ow = self.results.time_series(model,output,'catchment',**ts_tags)
+                ow = ow_fn(e,fu)
+                comparison_columns = ['%s: %s'%(fu,catchment) for catchment in ow.columns]
+                fu_comparison = comparison[comparison_columns]
+                if ow.sum().sum()==0 and fu_comparison.sum().sum()==0:
+                    for sc in ow.columns:
+                        errors.append({'catchment':sc,'cgu':fu,tag:e,'ssquares':0,
+                                       'sum-ow':0,'sum-orig':0,'r-squared':1,
+                                       'delta':0})
+                else:
+                    for sc in ow.columns:
+                        res = {'catchment':sc,'cgu':fu,tag:e,'ssquares':0,'r-squared':1,'sum-ow':0,'sum-orig':0,'delta':0}
+                        ow_sc = ow[sc]
+                        orig_sc = fu_comparison['%s: %s'%(fu,sc)]
+                        if ow_sc.sum()>0 or orig_sc.sum()>0:
+                            orig_scaled = (orig_sc*86400)
+                            ow_scaled = (ow_sc*86400)
+                            res['ssquares'] = sum_squares(orig_scaled,ow_scaled)
+                            _,_,r_value,_,_ = stats.linregress(orig_scaled,ow_scaled)
+                            res['r-squared'] = r_value**2
+                            res['sum-ow'] = ow_scaled.sum()
+                            res['sum-orig'] = orig_scaled.sum()
+                            res['delta'] = res['sum-orig'] - res['sum-ow']
+                        errors.append(res)
+        return pd.DataFrame(errors)
+
+    def compare_constituent_generation(self,constituents=None,progress=print):
+        if constituents is None:
+            constituents = self.meta['constituents']
+
+        def get_gen(c,fu):
+            mod,flux = self.generation_model(c,fu)
+            return self.results.time_series(mod,flux,'catchment',cgu=fu,constituent=c)
+
+        return self.compare_fu_level_results(constituents,'%sgeneration',get_gen,'constituent',progress)
+
+    def compare_runoff(self,progress=print):
+        def get_runoff(c,fu):
+            if c=='baseflow':
+                c = 'Baseflow'
+            elif c=='runoff':
+                c = 'Quickflow'
+            else:
+                c = 'Runoff'
+            return self.results.time_series('DepthToRate','outflow','catchment',cgu=fu,component=c)
+
+        return self.compare_fu_level_results(['baseflow','runoff','totalflow'],
+                                             '%s',
+                                             get_runoff,
+                                             'component',
+                                             progress)
+
+    def comparable_flows(self,sc,time_period=None):
+        self._load_flows()
+
+        if not sc in self.comparison_flows.columns or not sc in self.link_outflow.columns:
+            return None,None
+
+        orig = self.comparison_flows[sc]
+        ow = self.link_outflow[sc]
+        common = orig.index.intersection(ow.index)
+        orig = orig[common]
+        ow = ow[common]
+        if time_period is not None:
+            return orig[time_period],ow[time_period]
+        return orig,ow
+
+    def compare_flow(self,sc):
+        orig, ow = self.comparable_flows(sc)
+        if orig is None or ow is None:
+            print('Problem in %s'%sc)
+            return {}#np.nan
+
+        _,_,r_value,_,_ = stats.linregress(orig,ow)
+        res = {
+            'r-squared':r_value**2,
+            'ssquares': sum_squares(orig,ow),
+            'sum-ow': ow.sum(),
+            'sum-orig': orig.sum()
+        }
+
+        res['delta'] = res['sum-orig'] - res['sum-ow']
+        return res
+
+    def compare_flows(self):
+        self._load_flows()
+        columns = self.link_outflow.columns
+        return pd.DataFrame([self.compare_flow(c) for c in columns],index=columns)
+
+
+    def get_routed_constituent(self,constituent,catchment):
+        from_source = self.get_source_timeseries('%snetwork'%constituent)
+
+        model,output = self.transport_model(constituent)
+        # print('OW results in %s.%s'%(model,output))
+        from_ow = self.results.time_series(model,output,'catchment',constituent=constituent)
+
+        comparison_column = 'link for catchment %s'%catchment
+        print(from_source.columns)
+        return (from_source[comparison_column]*PER_DAY_TO_PER_SECOND), from_ow[catchment]
+
+    def compare_constituent_transport(self,constituents=None,progress=print):
+        if constituents is None:
+            constituents = self.meta['constituents']
+
+        SOURCE_COL_PREFIX='link for catchment '
+        errors = []
+        for c in constituents:
+            progress(c)
+            comparison = self.get_source_timeseries('%snetwork'%c)
+            comparison = comparison[[catchment for catchment in comparison.columns if catchment.startswith(SOURCE_COL_PREFIX)]]
+            comparison = comparison.rename(columns={catchment:catchment.replace(SOURCE_COL_PREFIX,'') for catchment in comparison.columns})
+            comparison = comparison * PER_DAY_TO_PER_SECOND
+            model,output = self.transport_model(c)
+            if 'constituent' in self.results.dims_for_model(model):
+                ow = self.results.time_series(model,output,'catchment',constituent=c)
+            else:
+                ow = self.results.time_series(model,output,'catchment')
+            # progress(comparison.columns)
+            # progress(ow.columns)
+            for sc in ow.columns:
+                if not sc in comparison:
+                    continue
+
+                res = {'catchment':sc,'constituent':c,'r-squared':1,'ssquares':0,'sum-ow':0,'sum-orig':0,'delta':0}
+                ow_sc = ow[sc]
+                orig_sc = comparison[sc]
+                if ow_sc.sum()>0 or orig_sc.sum()>0:
+                    orig_scaled = (orig_sc*86400)
+                    ow_scaled = (ow_sc*86400)
+                    _,_,r_value,_,_ = stats.linregress(orig_scaled,ow_scaled)
+                    res['r-squared'] = r_value**2
+                    res['ssquares'] = sum_squares(orig_scaled,ow_scaled)
+                    res['sum-ow'] = ow_scaled.sum()
+                    res['sum-orig'] = orig_scaled.sum()
+                    res['delta'] = res['sum-orig'] - res['sum-ow']
+                errors.append(res)
+        #    break
+        return pd.DataFrame(errors)
