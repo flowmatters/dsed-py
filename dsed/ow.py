@@ -15,6 +15,8 @@ SEDIMENT_CLASSES = [FINE_SEDIMENT,COARSE_SEDIMENT]
 STANDARD_NUTRIENTS = ['TN','TP']
 
 STANDARD_CONSTITUENTS = SEDIMENT_CLASSES + STANDARD_NUTRIENTS
+QUICKFLOW_INPUTS = ['quickflow','flow']
+BASEFLOW_INPUTS = ['baseflow','slowflow']
 
 NIL_MODELS = {
     'Dynamic_SedNet.Models.SedNet_Blank_Constituent_Generation_Model',
@@ -228,14 +230,17 @@ class DynamicSednetCGU(object):
                 continue
 
             gen_node = template.add_node(model,process='ConstituentGeneration',constituent=con,**kwargs)
-            if 'quickflow' in model.description['Inputs']:
-                template.add_link(OWLink(quickflow_scale_node,'outflow',gen_node,'quickflow'))
-            if 'baseflow' in model.description['Inputs']:
-                template.add_link(OWLink(baseflow_scale_node,'outflow',gen_node,'baseflow'))
-            if 'slowflow' in model.description['Inputs']:
-                template.add_link(OWLink(baseflow_scale_node,'outflow',gen_node,'slowflow'))
-            if 'flow' in model.description['Inputs']:
-                template.add_link(OWLink(quickflow_scale_node,'outflow',gen_node,'flow'))
+            template.add_conditional_link(quickflow_scale_node,'outflow',gen_node,QUICKFLOW_INPUTS,model)
+            template.add_conditional_link(baseflow_scale_node, 'outflow',gen_node,BASEFLOW_INPUTS,model)
+
+            # if 'quickflow' in model.description['Inputs']:
+            #     template.add_link(OWLink(quickflow_scale_node,'outflow',gen_node,'quickflow'))
+            # if 'baseflow' in model.description['Inputs']:
+            #     template.add_link(OWLink(baseflow_scale_node,'outflow',gen_node,'baseflow'))
+            # if 'slowflow' in model.description['Inputs']:
+            #     template.add_link(OWLink(baseflow_scale_node,'outflow',gen_node,'slowflow'))
+            # if 'flow' in model.description['Inputs']:
+            #     template.add_link(OWLink(quickflow_scale_node,'outflow',gen_node,'flow'))
 
             if model.name == 'SednetParticulateNutrientGeneration':
                 template.add_link(OWLink(gully_gen,'fineLoad',gen_node,'fineSedModelFineGullyGeneratedKg'))
