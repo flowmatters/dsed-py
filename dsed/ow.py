@@ -87,11 +87,13 @@ class HydrologicalResponseUnit(object):
     pass
 
 class DynamicSednetCGU(object):
-    def __init__(self,cropping_cgu=True,erosion_processes=True,sediment_fallback_model=False):
+    def __init__(self,cropping_cgu=True,sediment_fallback_model=False,gully_cgu=False,hillslope_cgu=False):
         self.cropping_cgu = cropping_cgu
-        self.erosion_processes = erosion_processes
+        # self.erosion_processes = erosion_processes
+        self.gully_cgu = gully_cgu
+        self.hillslope_cgu = hillslope_cgu
         self.sediment_fallback_model = sediment_fallback_model
-        assert (not bool(erosion_processes)) or (not bool(sediment_fallback_model))
+        assert (not bool(gully_cgu)) or (not bool(sediment_fallback_model))
 
     def generation_model(self,constituent,catchment_template,**kwargs):
         return catchment_template.model_for(catchment_template.cg,constituent,**kwargs)
@@ -117,17 +119,27 @@ class DynamicSednetCGU(object):
         template.define_output(runoff_scale_node,'outflow','lateral')
         # This should be able to be done automatically... any input not defined
 
-        sed_gen = None
+        hillslope_fine_sed_gen = None
+        hillslope_coarse_sed_gen = None
+        hillslope_fine_sed_gen_flux = None
+        hillslope_coarse_sed_gen_flux = None
+
         fine_ts_scale = None
         coarse_ts_scale = None
         gully_gen = None
 
-        if self.erosion_processes:
+        if self.hillslope_cgu:
             # Hillslope
             sed_gen = template.add_node(n.USLEFineSedimentGeneration,process="HillslopeGeneration",**kwargs)
             template.add_link(OWLink(quickflow_scale_node,'outflow',sed_gen,'quickflow'))
             template.add_link(OWLink(baseflow_scale_node,'outflow',sed_gen,'baseflow'))
 
+            hillslope_fine_sed_gen = sed_gen
+            hillslope_coarse_sed_gen = sed_gen
+            hillslope_fine_sed_gen_flux = 'quickLoadFine'
+            hillslope_coarse_sed_gen_flux = 'quickLoadCoarse'
+
+        if self.gully_cgu:
             # Gully
             gully_gen = template.add_node(n.DynamicSednetGullyAlt,process="GullyGeneration",**kwargs)
             template.add_link(OWLink(quickflow_scale_node,'outflow',gully_gen,'quickflow'))
@@ -135,17 +147,50 @@ class DynamicSednetCGU(object):
             fine_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=FINE_SEDIMENT,**kwargs)
             coarse_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=COARSE_SEDIMENT,**kwargs)
 
-            template.add_link(OWLink(sed_gen,'totalLoad',fine_sum,'i1')) # was quickLoadFine
             template.add_link(OWLink(gully_gen,'fineLoad',fine_sum,'i2'))
-
-            template.add_link(OWLink(sed_gen,'quickLoadCoarse',coarse_sum,'i1'))
             template.add_link(OWLink(gully_gen,'coarseLoad',coarse_sum,'i2'))
+
+            if self.hillslope_cgu:
+                template.add_link(OWLink(sed_gen,'totalLoad',fine_sum,'i1')) # was quickLoadFine
+                template.add_link(OWLink(sed_gen,'quickLoadCoarse',coarse_sum,'i1'))
+            else:
+                fine_dwc_node = add_emc_dwc(FINE_SEDIMENT)
+                template.add_link(OWLink(fine_dwc_node,'totalLoad',fine_sum,'i1'))
+
+                coarse_dwc_node = add_emc_dwc(COARSE_SEDIMENT)
+                template.add_link(OWLink(coarse_dwc_node,'totalLoad',coarse_sum,'i1'))
+
+                if self.cropping_cgu:
+                    ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=FINE_SEDIMENT,**kwargs)
+                    template.add_link(OWLink(quickflow_scale_node,'outflow',ts_node,'flow'))
+
+                    ts_split_node = template.add_node(n.FixedPartition,process='FineCoarseSplit',**kwargs)
+                    template.add_link(OWLink(ts_node,'outputLoad',ts_split_node,'input'))
+
+                    fine_ts_scale = template.add_node(n.ApplyScalingFactor,process='ConstituentScaling',constituent=FINE_SEDIMENT,**kwargs)
+                    template.add_link(OWLink(ts_split_node,'output1',fine_ts_scale,'input'))
+                    coarse_ts_scale = template.add_node(n.ApplyScalingFactor,process='ConstituentScaling',constituent=COARSE_SEDIMENT,**kwargs)
+                    template.add_link(OWLink(ts_split_node,'output2',coarse_ts_scale,'input'))
+
+                    template.add_link(OWLink(fine_ts_scale,'output',fine_sum,'i1'))
+                    template.add_link(OWLink(coarse_ts_scale,'output',coarse_sum,'i1'))
+
+                    hillslope_fine_sed_gen = fine_ts_scale
+                    hillslope_fine_sed_gen_flux = 'output'
+
+                    hillslope_coarse_sed_gen = coarse_ts_scale
+                    hillslope_coarse_sed_gen_flux = 'output'
+                else:
+                    hillslope_fine_sed_gen = fine_dwc_node
+                    hillslope_fine_sed_gen_flux = 'totalLoad'
+
+                    hillslope_coarse_sed_gen = coarse_dwc_node
+                    hillslope_coarse_sed_gen_flux = 'totalLoad'
 
             template.define_output(fine_sum,'out','generatedLoad',constituent=FINE_SEDIMENT)
             template.define_output(coarse_sum,'out','generatedLoad',constituent=COARSE_SEDIMENT)
 
         if self.cropping_cgu:
-
             for con in catchment_template.pesticides:
                 dwc_node = add_emc_dwc(con)
 
@@ -158,41 +203,8 @@ class DynamicSednetCGU(object):
 
                 template.define_output(sum_node,'out','generatedLoad')
 
-            # Sediments
-            gully_gen = template.add_node(n.DynamicSednetGullyAlt,process="GullyGeneration",**kwargs)
-            template.add_link(OWLink(quickflow_scale_node,'outflow',gully_gen,'quickflow'))
-
-            dwc_node = template.add_node(n.EmcDwc,process='ConstituentDryWeatherGeneration',constituent=FINE_SEDIMENT,**kwargs)
-            template.add_link(OWLink(quickflow_scale_node,'outflow',dwc_node,'quickflow'))
-            template.add_link(OWLink(baseflow_scale_node,'outflow',dwc_node,'baseflow'))
-
-            ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=FINE_SEDIMENT,**kwargs)
-            template.add_link(OWLink(quickflow_scale_node,'outflow',ts_node,'flow'))
-
-            ts_split_node = template.add_node(n.FixedPartition,process='FineCoarseSplit',**kwargs)
-            template.add_link(OWLink(ts_node,'outputLoad',ts_split_node,'input'))
-
-            fine_ts_scale = template.add_node(n.ApplyScalingFactor,process='ConstituentScaling',constituent=FINE_SEDIMENT,**kwargs)
-            template.add_link(OWLink(ts_split_node,'output1',fine_ts_scale,'input'))
-            coarse_ts_scale = template.add_node(n.ApplyScalingFactor,process='ConstituentScaling',constituent=COARSE_SEDIMENT,**kwargs)
-            template.add_link(OWLink(ts_split_node,'output2',coarse_ts_scale,'input'))
-
-            fine_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=FINE_SEDIMENT,**kwargs)
-            coarse_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=COARSE_SEDIMENT,**kwargs)
-
-            # TODO Need a coarse DWC as well.
-
-            template.add_link(OWLink(dwc_node,'totalLoad',fine_sum,'i1'))
-            template.add_link(OWLink(fine_ts_scale,'output',fine_sum,'i1'))
-            template.add_link(OWLink(gully_gen,'fineLoad',fine_sum,'i2'))
-
-            template.add_link(OWLink(coarse_ts_scale,'output',coarse_sum,'i1'))
-            template.add_link(OWLink(gully_gen,'coarseLoad',coarse_sum,'i2'))
-            template.define_output(fine_sum,'out','generatedLoad')
-            template.define_output(coarse_sum,'out','generatedLoad')
-
         for con in catchment_template.constituents:
-            if not self.sediment_fallback_model and (con == FINE_SEDIMENT or con == COARSE_SEDIMENT):
+            if not self.sediment_fallback_model and (con in [FINE_SEDIMENT,COARSE_SEDIMENT]):
                 continue
 
             if con in catchment_template.pesticides:
@@ -248,14 +260,27 @@ class DynamicSednetCGU(object):
                 template.add_link(OWLink(gully_gen,'fineLoad',gen_node,'fineSedModelFineGullyGeneratedKg'))
                 template.add_link(OWLink(gully_gen,'coarseLoad',gen_node,'fineSedModelCoarseGullyGeneratedKg'))
 
-                if sed_gen is not None:
-                    template.add_link(OWLink(sed_gen,'quickLoadFine',gen_node,'fineSedModelFineSheetGeneratedKg'))
-                    template.add_link(OWLink(sed_gen,'quickLoadCoarse',gen_node,'fineSedModelCoarseSheetGeneratedKg'))
-                else:
-                    assert fine_ts_scale is not None
-                    assert coarse_ts_scale is not None
-                    template.add_link(OWLink(fine_ts_scale,'output',gen_node,'fineSedModelFineSheetGeneratedKg'))
-                    template.add_link(OWLink(coarse_ts_scale,'output',gen_node,'fineSedModelCoarseSheetGeneratedKg'))
+                template.add_link(OWLink(hillslope_fine_sed_gen,hillslope_fine_sed_gen_flux,
+                                         gen_node,'fineSedModelFineSheetGeneratedKg'))
+                template.add_link(OWLink(hillslope_coarse_sed_gen,hillslope_coarse_sed_gen_flux,
+                                         gen_node,'fineSedModelCoarseSheetGeneratedKg'))
+
+                # if sed_gen is not None:
+                #     template.add_link(OWLink(sed_gen,'quickLoadFine',gen_node,'fineSedModelFineSheetGeneratedKg'))
+                #     template.add_link(OWLink(sed_gen,'quickLoadCoarse',gen_node,'fineSedModelCoarseSheetGeneratedKg'))
+                # else:
+                #     try:
+                #         assert fine_ts_scale is not None
+                #         assert coarse_ts_scale is not None
+                #     except:
+                #         print('con',con)
+                #         print('catchment_template.constituents',catchment_template.constituents)
+                #         print('fine_ts_scale',fine_ts_scale)
+                #         print('coarse_ts_scale',coarse_ts_scale)
+                #         print('kwargs',kwargs)
+                #         raise
+                #     template.add_link(OWLink(fine_ts_scale,'output',gen_node,'fineSedModelFineSheetGeneratedKg'))
+                #     template.add_link(OWLink(coarse_ts_scale,'output',gen_node,'fineSedModelCoarseSheetGeneratedKg'))
 
             template.define_output(gen_node,main_output_flux(model),'generatedLoad')
 
@@ -283,7 +308,8 @@ class DynamicSednetCatchment(object):
         self.dissolved_nutrients = dissolved_nutrients
         self.pesticides = pesticides
         self.pesticide_cgus = None
-        self.erosion_cgus = None
+        self.hillslope_cgus = None
+        self.gully_cgus = None
         self.sediment_fallback_cgu = None
 
         self.rr = n.Sacramento
@@ -416,7 +442,10 @@ class DynamicSednetCatchment(object):
 
     def cgu_factory(self,cgu):
         cropping_cgu = (self.pesticide_cgus is not None) and (cgu in self.pesticide_cgus)
-        erosion_proc = (self.erosion_cgus is None) or (cgu in self.erosion_cgus)
+        #erosion_proc = (self.erosion_cgus is None) or (cgu in self.erosion_cgus)
+        gully_proc = (self.gully_cgus is None) or (cgu in self.gully_cgus)
+        hillslope_proc = (self.hillslope_cgus is None) or (cgu in self.hillslope_cgus)
+
         emc_proc = False
         if self.sediment_fallback_cgu is not None:
             emc_proc = cgu in self.sediment_fallback_cgu
@@ -426,8 +455,9 @@ class DynamicSednetCatchment(object):
         # if cgu in ['Dryland', 'Irrigation', 'Horticulture', 'Irrigated Grazing']:
         #     return DynamicSednetAgCGU()
         return DynamicSednetCGU(cropping_cgu=cropping_cgu,
-                                erosion_processes=erosion_proc,
-                                sediment_fallback_model=emc_proc)
+                                sediment_fallback_model=emc_proc,
+                                gully_cgu=gully_proc,
+                                hillslope_cgu=hillslope_proc)
 
     def get_template(self,**kwargs):
         tag_values = list(kwargs.values())
