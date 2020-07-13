@@ -247,15 +247,6 @@ class DynamicSednetCGU(object):
             template.add_conditional_link(quickflow_scale_node,'outflow',gen_node,QUICKFLOW_INPUTS,model)
             template.add_conditional_link(baseflow_scale_node, 'outflow',gen_node,BASEFLOW_INPUTS,model)
 
-            # if 'quickflow' in model.description['Inputs']:
-            #     template.add_link(OWLink(quickflow_scale_node,'outflow',gen_node,'quickflow'))
-            # if 'baseflow' in model.description['Inputs']:
-            #     template.add_link(OWLink(baseflow_scale_node,'outflow',gen_node,'baseflow'))
-            # if 'slowflow' in model.description['Inputs']:
-            #     template.add_link(OWLink(baseflow_scale_node,'outflow',gen_node,'slowflow'))
-            # if 'flow' in model.description['Inputs']:
-            #     template.add_link(OWLink(quickflow_scale_node,'outflow',gen_node,'flow'))
-
             if model.name == 'SednetParticulateNutrientGeneration':
                 template.add_link(OWLink(gully_gen,'fineLoad',gen_node,'fineSedModelFineGullyGeneratedKg'))
                 template.add_link(OWLink(gully_gen,'coarseLoad',gen_node,'fineSedModelCoarseGullyGeneratedKg'))
@@ -264,23 +255,6 @@ class DynamicSednetCGU(object):
                                          gen_node,'fineSedModelFineSheetGeneratedKg'))
                 template.add_link(OWLink(hillslope_coarse_sed_gen,hillslope_coarse_sed_gen_flux,
                                          gen_node,'fineSedModelCoarseSheetGeneratedKg'))
-
-                # if sed_gen is not None:
-                #     template.add_link(OWLink(sed_gen,'quickLoadFine',gen_node,'fineSedModelFineSheetGeneratedKg'))
-                #     template.add_link(OWLink(sed_gen,'quickLoadCoarse',gen_node,'fineSedModelCoarseSheetGeneratedKg'))
-                # else:
-                #     try:
-                #         assert fine_ts_scale is not None
-                #         assert coarse_ts_scale is not None
-                #     except:
-                #         print('con',con)
-                #         print('catchment_template.constituents',catchment_template.constituents)
-                #         print('fine_ts_scale',fine_ts_scale)
-                #         print('coarse_ts_scale',coarse_ts_scale)
-                #         print('kwargs',kwargs)
-                #         raise
-                #     template.add_link(OWLink(fine_ts_scale,'output',gen_node,'fineSedModelFineSheetGeneratedKg'))
-                #     template.add_link(OWLink(coarse_ts_scale,'output',gen_node,'fineSedModelCoarseSheetGeneratedKg'))
 
             template.define_output(gen_node,main_output_flux(model),'generatedLoad')
 
@@ -442,7 +416,6 @@ class DynamicSednetCatchment(object):
 
     def cgu_factory(self,cgu):
         cropping_cgu = (self.pesticide_cgus is not None) and (cgu in self.pesticide_cgus)
-        #erosion_proc = (self.erosion_cgus is None) or (cgu in self.erosion_cgus)
         gully_proc = (self.gully_cgus is None) or (cgu in self.gully_cgus)
         hillslope_proc = (self.hillslope_cgus is None) or (cgu in self.hillslope_cgus)
 
