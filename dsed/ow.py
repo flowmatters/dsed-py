@@ -105,6 +105,12 @@ class DynamicSednetCGU(object):
         quickflow_scale_node = template.add_node(n.DepthToRate,process='ArealScale',component='Quickflow',**kwargs)
         baseflow_scale_node = template.add_node(n.DepthToRate,process='ArealScale',component='Baseflow',**kwargs)
 
+        def add_emc_dwc(con):
+            dwc_node = template.add_node(n.EmcDwc,process='ConstituentDryWeatherGeneration',constituent=con,**kwargs)
+            template.add_link(OWLink(quickflow_scale_node,'outflow',dwc_node,'quickflow'))
+            template.add_link(OWLink(baseflow_scale_node,'outflow',dwc_node,'baseflow'))
+            return dwc_node
+
         template.define_input(runoff_scale_node,'input','runoff')
         template.define_input(quickflow_scale_node,'input','quickflow')
         template.define_input(baseflow_scale_node,'input','baseflow')
@@ -141,9 +147,7 @@ class DynamicSednetCGU(object):
         if self.cropping_cgu:
 
             for con in catchment_template.pesticides:
-                dwc_node = template.add_node(n.EmcDwc,process='ConstituentDryWeatherGeneration',constituent=con,**kwargs)
-                template.add_link(OWLink(quickflow_scale_node,'outflow',dwc_node,'quickflow'))
-                template.add_link(OWLink(baseflow_scale_node,'outflow',dwc_node,'baseflow'))
+                dwc_node = add_emc_dwc(con)
 
                 ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=con,**kwargs)
                 template.add_link(OWLink(quickflow_scale_node,'outflow',ts_node,'flow'))
@@ -204,9 +208,7 @@ class DynamicSednetCGU(object):
                 ts_scale_node = template.add_node(n.ApplyScalingFactor,process='ConstituentScaling',constituent=con,**kwargs)
                 template.add_link(OWLink(ts_node,'outputLoad',ts_scale_node,'input'))
 
-                dwc_node = template.add_node(n.EmcDwc,process='ConstituentDryWeatherGeneration',constituent=con,**kwargs)
-                template.add_link(OWLink(quickflow_scale_node,'outflow',dwc_node,'quickflow'))
-                template.add_link(OWLink(baseflow_scale_node,'outflow',dwc_node,'baseflow'))
+                dwc_node = add_emc_dwc(con)
 
                 sum_node = template.add_node(n.Sum,process='ConstituentGeneration',constituent=con,**kwargs)
                 template.add_link(OWLink(ts_scale_node,'output',sum_node,'i1'))
