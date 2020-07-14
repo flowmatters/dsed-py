@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 def sum_squares(l1,l2):
     return sum((np.array(l1)-np.array(l2))**2)
