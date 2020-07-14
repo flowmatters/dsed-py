@@ -33,7 +33,7 @@ class SourceOWComparison(object):
 
         routing = 'StorageRouting'
         self.link_outflow = self.results.time_series(routing,'outflow','catchment')
-        self.comparison_flows = self.get_source_timeseries('downstream_vol')
+        self.comparison_flows = self.get_source_timeseries('downstream_flow_volume')
         self.comparison_flows = self.comparison_flows.rename(columns={c:c.replace('link for catchment ','') for c in self.comparison_flows.columns})
         self.comparison_flows = self.comparison_flows / 86400.0
 
@@ -53,9 +53,7 @@ class SourceOWComparison(object):
         SUM = 'Sum','out'
 
         if c in self.meta['sediments']:
-            if fu in self.meta['erosion_cgus']:
-                return SUM
-            if fu in self.meta['cropping_cgus']:
+            if fu in (self.meta['usle_cgus']+self.meta['cropping_cgus']+self.meta['gully_cgus']):
                 return SUM
             return EMC
 
@@ -168,15 +166,15 @@ class SourceOWComparison(object):
 
     def compare_runoff(self,progress=print):
         def get_runoff(c,fu):
-            if c=='baseflow':
+            if c=='Slow_Flow':
                 c = 'Baseflow'
-            elif c=='runoff':
+            elif c=='Quick_Flow':
                 c = 'Quickflow'
             else:
                 c = 'Runoff'
             return self.results.time_series('DepthToRate','outflow','catchment',cgu=fu,component=c)
 
-        return self.compare_fu_level_results(['baseflow','runoff','totalflow'],
+        return self.compare_fu_level_results(['Slow_Flow','Quick_Flow','Total_Flow'],
                                              '%s',
                                              get_runoff,
                                              'component',
