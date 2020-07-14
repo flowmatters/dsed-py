@@ -477,18 +477,13 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         apply_dataframe(particulate_nut_gen, node_types.SednetParticulateNutrientGeneration,complete=False)
 
         ts_load_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model')
-        # Particulate_P - time series should load (already converted to kg/m2/s)
-        # fu areas should load
-        #
-        ts_load_params['scale'] = ts_load_params['Load_Conversion_Factor'] * ts_load_params[
-            'DeliveryRatio'] * PERCENT_TO_FRACTION
-        apply_dataframe(ts_load_params, node_types.EmcDwc,complete=False)
-        apply_dataframe(ts_load_params, node_types.ApplyScalingFactor,complete=False)
-        # res.nested.append(
-        #     ParameterTableAssignment(ts_load_params, node_types.EmcDwc, dim_columns=['catchment', 'cgu', 'constituent'],
-        #                              complete=False))
-        # res.nested.append(ParameterTableAssignment(ts_load_params, node_types.ApplyScalingFactor,
-        #                                            dim_columns=['catchment', 'cgu', 'constituent'], complete=False))
+        if ts_load_params is not None:
+            # Particulate_P - time series should load (already converted to kg/m2/s)
+            # fu areas should load
+            #
+            ts_load_params['scale'] = ts_load_params['Load_Conversion_Factor'] * ts_load_params['DeliveryRatio'] * PERCENT_TO_FRACTION
+            apply_dataframe(ts_load_params, node_types.EmcDwc,complete=False)
+            apply_dataframe(ts_load_params, node_types.ApplyScalingFactor,complete=False)
 
         return res
 
