@@ -301,17 +301,6 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         for model,prop in area_models:
             res.nested.append(ParameterTableAssignment(fu_areas,model,prop,'cgu','catchment'))
 
-        # res.nested.append(ParameterTableAssignment(fu_areas, 'DepthToRate', 'area', 'cgu', 'catchment'))
-
-        # #  fu_areas_scaled = fu_areas
-        # res.nested.append(ParameterTableAssignment(fu_areas, 'PassLoadIfFlow', 'scalingFactor', 'cgu', 'catchment'))
-        # res.nested.append(ParameterTableAssignment(fu_areas, node_types.USLEFineSedimentGeneration, 'area','cgu', 'catchment'))
-
-        # gully_fu_areas_parameteriser = ParameterTableAssignment(fu_areas, node_types.DynamicSednetGully,
-        #                                                         'Area', 'cgu', 'catchment')
-        # res.nested.append(ParameterTableAssignment(fu_areas, node_types.DynamicSednetGullyAlt,'Area', 'cgu', 'catchment'))
-        # res.nested.append(ParameterTableAssignment(fu_areas,node_types.SednetParticulateNutrientGeneration,'area', 'cgu', 'catchment'))
-
         return res
 
     def _runoff_parameteriser(self):
@@ -417,11 +406,6 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         ts_sediment_scaling = compute_ts_sediment_scaling(gully_params)
         apply_dataframe(ts_sediment_scaling,node_types.ApplyScalingFactor,complete=False)
-        # ts_sediment_scaling_parameteriser = ParameterTableAssignment(ts_sediment_scaling,
-        #                                                              node_types.ApplyScalingFactor,
-        #                                                              dim_columns=['catchment', 'cgu', 'constituent'],
-        #                                                              complete=False)
-        # res.nested.append(ts_sediment_scaling_parameteriser)
 
 
         emc_dwc = self._load_param_csv('cg-' + SOURCE_EMC_MODEL)
@@ -431,9 +415,6 @@ class SourceOpenwaterDynamicSednetMigrator(object):
                 'dryMeanConcentration': 'DWC'
             })
             apply_dataframe(emc_dwc,node_types.EmcDwc,complete=False)
-            # emc_parameteriser = ParameterTableAssignment(emc_dwc, node_types.EmcDwc,
-            #                                             dim_columns=['catchment', 'cgu', 'constituent'], complete=False)
-            # res.nested.append(emc_parameteriser)
 
         gbr_crop_sed_params = gbr_crop_sed_params.rename(columns={
             'Catchment': 'catchment',
@@ -444,57 +425,31 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         crop_sed_fine_dwcs['DWC'] = crop_sed_fine_dwcs['HillslopeFineDWC']  # * PERCENT_TO_FRACTION * crop_sed_fine_dwcs['HillslopeFineSDR']
         crop_sed_fine_dwcs['constituent'] = FINE_SEDIMENT
         apply_dataframe(crop_sed_fine_dwcs,node_types.EmcDwc,complete=False)
-        # crop_sed_fine_dwc_parameteriser = ParameterTableAssignment(crop_sed_fine_dwcs, node_types.EmcDwc,
-        #                                                            dim_columns=['catchment', 'cgu', 'constituent'],
-        #                                                            complete=False)
-        # res.nested.append(crop_sed_fine_dwc_parameteriser)
 
         crop_sed_coarse_dwcs = gbr_crop_sed_params[['catchment', 'cgu', 'HillslopeCoarseDWC', 'HillslopeCoarseSDR']].copy()
         crop_sed_coarse_dwcs['DWC'] = crop_sed_coarse_dwcs[
             'HillslopeCoarseDWC']  # * PERCENT_TO_FRACTION * crop_sed_coarse_dwcs['HillslopeCoarseSDR']
         crop_sed_coarse_dwcs['constituent'] = COARSE_SEDIMENT
         apply_dataframe(crop_sed_coarse_dwcs,node_types.EmcDwc,complete=False)
-        # crop_sed_coarse_dwc_parameteriser = ParameterTableAssignment(crop_sed_fine_dwcs, node_types.EmcDwc,
-        #                                                              dim_columns=['catchment', 'cgu', 'constituent'],
-        #                                                              complete=False)
-        # res.nested.append(crop_sed_coarse_dwc_parameteriser)
 
         dissolved_nutrient_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Dissolved')
         apply_dataframe(dissolved_nutrient_params,node_types.SednetDissolvedNutrientGeneration,complete=False)
-        # dissolved_nutrients = ParameterTableAssignment(dissolved_nutrient_params,
-        #                                                node_types.SednetDissolvedNutrientGeneration,
-        #                                                dim_columns=['catchment', 'cgu', 'constituent'], complete=False)
-        # res.nested.append(dissolved_nutrients)
 
         part_nutrient_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Particulate')
         apply_dataframe(part_nutrient_params,node_types.SednetParticulateNutrientGeneration,complete=False)
-        # part_nutrients = ParameterTableAssignment(part_nutrient_params, node_types.SednetParticulateNutrientGeneration,
-        #                                           dim_columns=['catchment', 'cgu', 'constituent'], complete=False)
-        # res.nested.append(part_nutrients)
 
         sugarcane_din_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel')
         apply_dataframe(sugarcane_din_params, node_types.EmcDwc,complete=False)
-        # sugarcane_din_dwc_params = ParameterTableAssignment(sugarcane_din_params, node_types.EmcDwc,
-        #                                                     dim_columns=['catchment', 'cgu', 'constituent'], complete=False)
-        # res.nested.append(sugarcane_din_dwc_params)
 
         sugarcane_din_params['scale'] = sugarcane_din_params['Load_Conversion_Factor'] * sugarcane_din_params[
             'DeliveryRatioSurface'] * PERCENT_TO_FRACTION
         apply_dataframe(sugarcane_din_params, node_types.ApplyScalingFactor,complete=False)
-        # sugarcane_din_scale_params = ParameterTableAssignment(sugarcane_din_params, node_types.ApplyScalingFactor,
-        #                                                       dim_columns=['catchment', 'cgu', 'constituent'],
-        #                                                       complete=False)
-        # res.nested.append(sugarcane_din_scale_params)
 
         sugarcane_leached_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel')
         sugarcane_leached_params['constituent'] = 'NLeached'
         sugarcane_leached_params['scale'] = sugarcane_leached_params['Load_Conversion_Factor'] * sugarcane_din_params[
             'DeliveryRatioSeepage'] * PERCENT_TO_FRACTION
         apply_dataframe(sugarcane_leached_params, node_types.ApplyScalingFactor,complete=False)
-        # sugarcane_leached_scale_params = ParameterTableAssignment(sugarcane_leached_params, node_types.ApplyScalingFactor,
-        #                                                           dim_columns=['catchment', 'cgu', 'constituent'],
-        #                                                           complete=False)
-        # res.nested.append(sugarcane_leached_scale_params)
 
         sugarcane_p_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DissP_Gen_Model')
         if sugarcane_p_params is not None:
@@ -503,9 +458,6 @@ class SourceOpenwaterDynamicSednetMigrator(object):
             sugarcane_p_params['EMC'] = sugarcane_p_params['ProportionOfTotalP'] * sugarcane_p_params[
                 'Load_Conversion_Factor'] * sugarcane_p_params['DeliveryRatioAsPercent'] * PERCENT_TO_FRACTION
             apply_dataframe(sugarcane_p_params, node_types.EmcDwc,complete=False)
-            # res.nested.append(
-            #     ParameterTableAssignment(sugarcane_p_params, node_types.EmcDwc, dim_columns=['catchment', 'cgu', 'constituent'],
-            #                             complete=False))
 
         # OLD
         # if (phos_saturation_index < 10)
@@ -523,9 +475,6 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         particulate_nut_gen = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Particulate')
         apply_dataframe(particulate_nut_gen, node_types.SednetParticulateNutrientGeneration,complete=False)
-        # res.nested.append(
-        #     ParameterTableAssignment(particulate_nut_gen, node_types.SednetParticulateNutrientGeneration,
-        #                              dim_columns=['catchment', 'cgu', 'constituent'], complete=False))
 
         ts_load_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model')
         # Particulate_P - time series should load (already converted to kg/m2/s)
