@@ -20,7 +20,11 @@ class SourceOWComparison(object):
         self.source_timeseries_cache = {}
 
     def _load_csv(self,f):
-        return pd.read_csv(os.path.join(self.source_results_path,f.replace(' ','')+'.csv'),index_col=0,parse_dates=True)
+        # fn = os.path.join(self.source_results_path,f.replace(' ','')+'.csv')
+        fn = os.path.join(self.source_results_path,f+'.csv')
+        if not os.path.exists(fn):
+            fn = fn + '.gz'
+        return pd.read_csv(fn,index_col=0,parse_dates=True)
 
     def _load_flows(self):
         if self.comparison_flows is not None:

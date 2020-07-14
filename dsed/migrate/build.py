@@ -97,7 +97,9 @@ class SourceOpenwaterDynamicSednetMigrator(object):
     def _load_csv(self,f):
         fn = os.path.join(self.data_path, f + '.csv')
         if not os.path.exists(fn):
-            return None
+            fn = fn + '.gz'
+            if not os.path.exists(fn):
+                return None
 
         return pd.read_csv(fn, index_col=0, parse_dates=True)
 
