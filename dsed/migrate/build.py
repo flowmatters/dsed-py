@@ -68,12 +68,12 @@ def _rename_tag_columns(dataframe):
 def _rename_link_tag_columns(dataframe, link_renames, link_col='NetworkElement'):
     dataframe = dataframe.replace(link_renames)
     dataframe = dataframe.rename(columns={'Constituent': 'constituent'})
-    dataframe['catchment'] = dataframe[link_col].str.slice(19)
+    dataframe['catchment'] = dataframe[link_col].str.slice(len(EXPECTED_LINK_PREFIX))
 
     return dataframe
 
 def build_ow_model(data_path, start='1986/07/01', end='2014/06/30',
-                   link_renames={},
+                   link_renames=None,
                    progress=print):
     builder = SourceOpenwaterDynamicSednetMigrator(data_path)
     return builder.build_ow_model(start,end,link_renames,progress)
@@ -536,11 +536,14 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         return res
 
     def build_ow_model(self,start='1986/07/01', end='2014/06/30',
-                       link_renames={},
+                       link_renames=None,
                        progress=print):
 
         network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
         network_veneer = _extend_network(self._load_json('network'))
+
+        if link_renames is None:
+            link_renames = map_link_name_mismatches(network_veneer)
 
         time_period = pd.date_range(start, end)
 
@@ -631,3 +634,23 @@ def lag_non_routing_links(params):
     #print('Links to lag',len(links_to_lag),links_to_lag)
     return lag_links(links_to_lag)
 
+def map_link_name_mismatches(network):
+    network_df = network.as_dataframe()
+    catchments = network_df[network_df.feature_type=='catchment']
+    links = network_df[network_df.feature_type=='link']
+
+    links_with_mismatched_names = links[~links.name.str.startswith(EXPECTED_LINK_PREFIX)][['name','veneer_id']].set_index('veneer_id')
+
+    corresponding_catchments = catchments[catchments.link.isin(list(links_with_mismatched_names.index))][['name','link']].set_index('link')
+
+    lookup = corresponding_catchments.join(links_with_mismatched_names,how='inner',lsuffix='_catchment',rsuffix='_link')
+    lookup['old_name'] = lookup['name_link']
+    lookup['new_name'] = EXPECTED_LINK_PREFIX
+    lookup['new_name'] = lookup['new_name'] + lookup['name_catchment']
+    lookup = lookup.set_index('old_name')
+    lookup['new_name'].to_dict()
+
+    result = lookup['new_name'].to_dict()
+    print(result)
+
+    return result
