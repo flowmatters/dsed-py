@@ -6,6 +6,7 @@ from functools import reduce
 import pandas as pd
 import geopandas as gpd
 from dsed.ow import DynamicSednetCatchment, FINE_SEDIMENT, COARSE_SEDIMENT
+from .const import *
 
 import openwater.nodes as node_types
 from openwater.examples import from_source
@@ -16,14 +17,7 @@ from openwater.template import OWTemplate, TAG_MODEL,TAG_PROCESS
 
 from veneer.general import _extend_network
 
-SQKM_TO_SQM = 1000*1000
-M2_TO_HA = 1e-4
-PER_SECOND_TO_PER_DAY=86400
-PER_DAY_TO_PER_SECOND=1/PER_SECOND_TO_PER_DAY
-G_TO_KG=1e-3
-TONS_TO_KG=1e3
-PERCENT_TO_FRACTION=1e-2
-
+EXPECTED_LINK_PREFIX='link for catchment '
 SOURCE_EMC_MODEL='RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel'
 DS_SEDIMENT_MODEL='Dynamic_SedNet.Models.SedNet_Sediment_Generation'
 DS_EMC_GULLY_MODEL='Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model'
