@@ -86,8 +86,9 @@ class SourceOWComparison(object):
             if (fu in self.meta['cropping_cgus']) and (fu != 'Sugarcane') and (c == 'P_Particulate'):
                 return SUM
 
-            if fu in self.meta['erosion_cgus'] or fu in self.meta['cropping_cgus']:
-                return 'SednetParticulateNutrientGeneration', 'totalLoad'
+            for fu_cat in ['cropping_cgus','hillslope_emc_cgus','gully_cgus','erosion_cgus']:
+                if fu in self.meta.get(fu_cat,[]):
+                    return 'SednetParticulateNutrientGeneration', 'totalLoad'
 
         return EMC
 
