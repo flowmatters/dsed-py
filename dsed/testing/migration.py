@@ -39,6 +39,14 @@ def migration_test(path, link_renames={}):
     frac_bad = n_bad / len(r_squareds)
     assert_that(frac_bad).is_less_than_or_equal_to(0.05)
 
+def _ensure_uncompressed(fn):
+    if os.path.exists(fn):
+        return
+    gzfn = fn + '.gz'
+    if not os.path.exists(gzfn):
+        raise Exception('File not found (compressed or uncompressed): %s'%fn)
+    os.system('gunzip %s'%gzfn)
+    assert os.path.exists(fn)
 
 class SourceImplementation(object):
     def __init__(self, directory):
@@ -64,7 +72,11 @@ class OpenwaterImplementation(object):
         self.model.run(self.dates, self.ow_results_fn, overwrite=True)
         self.open_files()
 
+
     def open_files(self):
+        _ensure_uncompressed(self.ow_model_fn)
+        _ensure_uncompressed(self.ow_results_fn)
+
         self.results = OpenwaterResults(self.ow_model_fn,
                                         self.ow_results_fn,
                                         self.dates)
