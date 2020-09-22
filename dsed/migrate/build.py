@@ -103,7 +103,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
             return None
         return _rename_tag_columns(df)
 
-    def _get_combined_cropping(self):
+    def _get_combined_cropping(self,cropping):
         dwcs = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_Pest_TSLoad_Model')
         if dwcs is None:
             return None,[]
@@ -147,14 +147,14 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         cropping_cgus = list(set(cropping_cgus))
         # print(combined_cropping.describe().transpose().describe())
         # Particulate_Load_g_per_Ha or Dissolved_Load_g_per_Ha
-        return combined_copping,cropping_cgus
+        return combined_cropping,cropping_cgus
 
     def get_cropping_input_timeseries(self,cropping_df):
         cropping = cropping_df
         cropping_inputs = DataframeInputs()
 
-        combined_copping,cropping_cgus = self._get_combined_cropping()
-        if combined_copping is not None:
+        combined_cropping,cropping_cgus = self._get_combined_cropping(cropping_df)
+        if combined_cropping is not None:
             cropping_inputs.inputter(combined_cropping, 'inputLoad',
                                     '${constituent}$$Combined_Load_kg_per_m2_per_s$$${catchment}$$${cgu}')
 
