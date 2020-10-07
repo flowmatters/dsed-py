@@ -124,8 +124,8 @@ class DynamicSednetCGU(object):
         hillslope_fine_sed_gen_flux = None
         hillslope_coarse_sed_gen_flux = None
 
-        fine_ts_scale = None
-        coarse_ts_scale = None
+        # fine_ts_scale = None
+        # coarse_ts_scale = None
         gully_gen = None
 
         if self.hillslope_cgu:
