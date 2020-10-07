@@ -159,25 +159,41 @@ class SourceOWComparison(object):
                         errors.append(res)
         return pd.DataFrame(errors)
 
+    def get_paired_generation(self,catchment,fu,constituent):
+        source = self.get_source_timeseries('%sgeneration'%constituent)['%s: %s'%(fu,catchment)]
+        ow = self.get_ow_gen(constituent,fu)[catchment]
+        return source, ow
+
+    def get_ow_gen(self,c,fu):
+        mod,flux = self.generation_model(c,fu)
+        return self.results.time_series(mod,flux,'catchment',cgu=fu,constituent=c)
+
     def compare_constituent_generation(self,constituents=None,progress=print):
         if constituents is None:
             constituents = self.meta['constituents']
 
         def get_gen(c,fu):
-            mod,flux = self.generation_model(c,fu)
-            return self.results.time_series(mod,flux,'catchment',cgu=fu,constituent=c)
+            return self.get_ow_gen(c,fu)
 
         return self.compare_fu_level_results(constituents,'%sgeneration',get_gen,'constituent',progress)
 
+    def get_ow_runoff(self,c,fu):
+        if c=='Slow_Flow':
+            c = 'Baseflow'
+        elif c=='Quick_Flow':
+            c = 'Quickflow'
+        else:
+            c = 'Runoff'
+        return self.results.time_series('DepthToRate','outflow','catchment',cgu=fu,component=c)
+
+    def get_paired_runoff(self,catchment,fu,component):
+        source = self.get_source_timeseries(component)['%s: %s'%(fu,catchment)]
+        ow = self.get_ow_runoff(component,fu)[catchment]
+        return source, ow
+
     def compare_runoff(self,progress=print):
         def get_runoff(c,fu):
-            if c=='Slow_Flow':
-                c = 'Baseflow'
-            elif c=='Quick_Flow':
-                c = 'Quickflow'
-            else:
-                c = 'Runoff'
-            return self.results.time_series('DepthToRate','outflow','catchment',cgu=fu,component=c)
+            return self.get_ow_runoff(c,fu)
 
         return self.compare_fu_level_results(['Slow_Flow','Quick_Flow','Total_Flow'],
                                              '%s',
