@@ -433,17 +433,18 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         apply_dataframe(part_nutrient_params,node_types.SednetParticulateNutrientGeneration,complete=False)
 
         sugarcane_din_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel')
-        apply_dataframe(sugarcane_din_params, node_types.EmcDwc,complete=False)
+        if sugarcane_din_params is not None:
+            apply_dataframe(sugarcane_din_params, node_types.EmcDwc,complete=False)
 
-        sugarcane_din_params['scale'] = sugarcane_din_params['Load_Conversion_Factor'] * sugarcane_din_params[
-            'DeliveryRatioSurface'] * PERCENT_TO_FRACTION
-        apply_dataframe(sugarcane_din_params, node_types.ApplyScalingFactor,complete=False)
+            sugarcane_din_params['scale'] = sugarcane_din_params['Load_Conversion_Factor'] * sugarcane_din_params[
+                'DeliveryRatioSurface'] * PERCENT_TO_FRACTION
+            apply_dataframe(sugarcane_din_params, node_types.ApplyScalingFactor,complete=False)
 
-        sugarcane_leached_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel')
-        sugarcane_leached_params['constituent'] = 'NLeached'
-        sugarcane_leached_params['scale'] = sugarcane_leached_params['Load_Conversion_Factor'] * sugarcane_din_params[
-            'DeliveryRatioSeepage'] * PERCENT_TO_FRACTION
-        apply_dataframe(sugarcane_leached_params, node_types.ApplyScalingFactor,complete=False)
+            sugarcane_leached_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel')
+            sugarcane_leached_params['constituent'] = 'NLeached'
+            sugarcane_leached_params['scale'] = sugarcane_leached_params['Load_Conversion_Factor'] * sugarcane_din_params[
+                'DeliveryRatioSeepage'] * PERCENT_TO_FRACTION
+            apply_dataframe(sugarcane_leached_params, node_types.ApplyScalingFactor,complete=False)
 
         sugarcane_p_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DissP_Gen_Model')
         if sugarcane_p_params is not None:
