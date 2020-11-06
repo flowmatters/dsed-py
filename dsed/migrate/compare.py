@@ -23,6 +23,7 @@ class SourceOWComparison(object):
         self.comparison_flows = None
         self.link_outflow = None
         self.source_timeseries_cache = {}
+        self.ow_timeseries_cache = {}
 
     def _load_csv(self,f):
         # fn = os.path.join(self.source_results_path,f.replace(' ','')+'.csv')
@@ -65,8 +66,13 @@ class SourceOWComparison(object):
             return SUM
 
         if c in self.meta['dissolved_nutrients']:
-            if fu in ['Water','Conservation','Horticulture','Other','Urban','Forestry']:
+            if fu in ['Water']: #,'Conservation','Horticulture','Other','Urban','Forestry']:
                 return EMC
+
+            if (self.meta['ts_load'] is not None) and \
+               (fu in self.meta['ts_load']['cgus']) and \
+               (c in self.meta['ts_load']['constituents']):
+               return SUM
 
             if fu == 'Sugarcane':
                 if c=='N_DIN':
@@ -75,16 +81,19 @@ class SourceOWComparison(object):
                     return EMC
                 elif c.startswith('P'):
                     return EMC
+            if (fu == 'Bananas') and (c=='N_DIN'):
+                return SUM
 
-            if fu in self.meta['cropping_cgus']:
+            if fu in self.meta['cropping_cgus'] or fu in self.meta.get('pesticide_cgus',[]):
                 if c.startswith('P'):
                     return 'PassLoadIfFlow', 'outputLoad'
 
             return 'SednetDissolvedNutrientGeneration', 'totalLoad'
 
         if c in self.meta['particulate_nutrients']:
-            if (fu in self.meta['cropping_cgus']) and (fu != 'Sugarcane') and (c == 'P_Particulate'):
-                return SUM
+            if (fu != 'Sugarcane') and (c == 'P_Particulate'):
+                if (fu in self.meta['cropping_cgus']) or (fu in self.meta.get('timeseries_sediment',[])):
+                    return SUM
 
             for fu_cat in ['cropping_cgus','hillslope_emc_cgus','gully_cgus','erosion_cgus']:
                 if fu in self.meta.get(fu_cat,[]):
@@ -116,7 +125,7 @@ class SourceOWComparison(object):
 
         model,output = self.generation_model(constituent,fu)
         # print('OW results in %s.%s'%(model,output))
-        from_ow = self.results.time_series(model,output,'catchment',cgu=fu,constituent=constituent)
+        from_ow = self.get_ow_timeseries(model,output,'catchment',cgu=fu,constituent=constituent)
 
         comparison_column = '%s: %s'%(fu,catchment)
         return from_source[comparison_column], from_ow[catchment]
@@ -184,7 +193,7 @@ class SourceOWComparison(object):
             c = 'Quickflow'
         else:
             c = 'Runoff'
-        return self.results.time_series('DepthToRate','outflow','catchment',cgu=fu,component=c)
+        return self.get_ow_timeseries('DepthToRate','outflow','catchment',cgu=fu,component=c)
 
     def get_paired_runoff(self,catchment,fu,component):
         source = self.get_source_timeseries(component)['%s: %s'%(fu,catchment)]
@@ -238,13 +247,18 @@ class SourceOWComparison(object):
         columns = self.link_outflow.columns
         return pd.DataFrame([self.compare_flow(c) for c in columns],index=columns)
 
+    def get_ow_timeseries(self,*args,**kwargs):
+        cache_key = tuple([args] + list(kwargs.items()))
+        if cache_key not in self.ow_timeseries_cache:
+            self.ow_timeseries_cache[cache_key] = self.results.time_series(*args,**kwargs)
+        return self.ow_timeseries_cache[cache_key]
 
     def get_routed_constituent(self,constituent,catchment):
         from_source = self.get_source_timeseries('%snetwork'%constituent)
 
         model,output = self.transport_model(constituent)
         # print('OW results in %s.%s'%(model,output))
-        from_ow = self.results.time_series(model,output,'catchment',constituent=constituent)
+        from_ow = self.get_ow_timeseries(model,output,'catchment',constituent=constituent)
 
         comparison_column = 'link for catchment %s'%catchment
         print(from_source.columns)
@@ -264,9 +278,9 @@ class SourceOWComparison(object):
             comparison = comparison * PER_DAY_TO_PER_SECOND
             model,output = self.transport_model(c)
             if 'constituent' in self.results.dims_for_model(model):
-                ow = self.results.time_series(model,output,'catchment',constituent=c)
+                ow = self.get_ow_timeseries(model,output,'catchment',constituent=c)
             else:
-                ow = self.results.time_series(model,output,'catchment')
+                ow = self.get_ow_timeseries(model,output,'catchment')
             # progress(comparison.columns)
             # progress(ow.columns)
             for sc in ow.columns:

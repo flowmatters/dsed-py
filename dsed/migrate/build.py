@@ -14,7 +14,7 @@ from openwater import debugging
 from openwater.config import Parameteriser, ParameterTableAssignment, DataframeInputs, DefaultParameteriser, NestedParameteriser
 import openwater.template as templating
 from openwater.template import OWTemplate, TAG_MODEL,TAG_PROCESS
-
+from openwater.timing import init_timer, report_time, close_timer
 from veneer.general import _extend_network
 
 EXPECTED_LINK_PREFIX='link for catchment '
@@ -39,18 +39,19 @@ def simplify(table ,column ,criteria=['Constituent']):
     return table.drop_duplicates(new_columns)[new_columns]
 
 
-def compute_ts_sediment_scaling(df):
-    fine_sed_scaling = df['LoadConversionFactor'] * df['HillslopeFineSDR'] / 100.0
+def compute_ts_sediment_delivery_ratios(df):
+    fine_sed_scaling = df['HillslopeFineSDR'] / 100.0  # df['LoadConversionFactor'] * 
     coarse_sed_scaling = df['HillslopeCoarseSDR'] / 100.0
 
     fine_df = df[['catchment', 'cgu']]
     fine_df = fine_df.copy()
-    fine_df['scale'] = fine_sed_scaling
+    fine_df['fraction'] = fine_sed_scaling
     fine_df['constituent'] = FINE_SEDIMENT
+    fine_df['scale'] = df['LoadConversionFactor']
 
     coarse_df = df[['catchment', 'cgu']]
     coarse_df = coarse_df.copy()
-    coarse_df['scale'] = coarse_sed_scaling
+    coarse_df['fraction'] = coarse_sed_scaling
     coarse_df['constituent'] = COARSE_SEDIMENT
 
     return pd.concat([fine_df, coarse_df])
@@ -183,13 +184,16 @@ class SourceOpenwaterDynamicSednetMigrator(object):
     def build_catchment_template(self,meta):
         catchment_template = DynamicSednetCatchment(dissolved_nutrients=meta['dissolved_nutrients'],
                                                     particulate_nutrients=meta['particulate_nutrients'],
-                                                    pesticides=meta['pesticides'])  # pesticides)
+                                                    particulate_nutrient_cgus=meta['particulate_nutrient_cgus'],
+                                                    pesticides=meta['pesticides'],
+                                                    ts_load_with_dwc=meta['ts_load'])  # pesticides)
 
         fus = meta['fus']
         catchment_template.hrus = fus
         catchment_template.cgus = fus
         catchment_template.cgu_hrus = {fu: fu for fu in fus}
         catchment_template.pesticide_cgus = meta['pesticide_cgus']
+        catchment_template.timeseries_sediment_cgus = meta['timeseries_sediment']
         catchment_template.hillslope_cgus = meta['usle_cgus']
         catchment_template.gully_cgus = meta['gully_cgus']
         catchment_template.sediment_fallback_cgu = meta['emc_cgus']
@@ -224,6 +228,9 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         particulate_nutrients = [c for c in constituents if '_Particulate' in c]
         meta['particulate_nutrients'] = particulate_nutrients
 
+        part_nutrient_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Particulate')
+        meta['particulate_nutrient_cgus'] = list(set(part_nutrient_params.cgu))
+
         sediments = [c for c in constituents if c.startswith('Sediment - ')]
         meta['sediments'] = sediments
 
@@ -231,6 +238,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         meta['pesticides'] = pesticides
         meta['pesticide_cgus'] = list(pesticide_cgus)
 
+        meta['timeseries_sediment'] = list(set([c.split('$')[-1] for c in cropping.columns if 'Sediment - Fine$Soil_Load_T_per_Ha' in c]))
         print('pesticide_cgus',pesticide_cgus)
         cg_models = self._load_csv('cgmodels')
         cg_models = simplify(cg_models, 'model', ['Constituent', 'Functional Unit', 'Catchment'])
@@ -265,6 +273,10 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         meta['usle_cgus'] = cgus_using_model(FINE_SEDIMENT,DS_SEDIMENT_MODEL)
         meta['gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,GULLY_MODELS)
         meta['hillslope_emc_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,EMC_DWC_MODELS)
+        meta['ts_load'] = {
+            'cgus': list(set(cg_models[cg_models.model=='Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model']['Functional Unit'])),
+            'constituents':list(set(cg_models[cg_models.model=='Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model']['Constituent'])),
+        }
 
         return meta
 
@@ -350,8 +362,9 @@ class SourceOpenwaterDynamicSednetMigrator(object):
             columns={c: c.replace('_', '') for c in gbr_crop_sed_params.columns})
 
         gbr_emc_gully_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model')
+        gbr_emc_gully_params['Gully_Management_Practice_Factor'] = 0.0 # HACK work around bug in C#
         for sed in ['Fine','Coarse']:
-            emc_dwc_params = gbr_emc_gully_params.rename({
+            emc_dwc_params = gbr_emc_gully_params.rename(columns={
                 sed.lower()+'EMC':'EMC',
                 sed.lower()+'DWC':'DWC'
             }).copy()
@@ -398,9 +411,11 @@ class SourceOpenwaterDynamicSednetMigrator(object):
                                                   parameter='fraction', column_dim='cgu', row_dim='catchment')
         res.nested.append(hillslope_fine)
 
-        ts_sediment_scaling = compute_ts_sediment_scaling(gully_params)
-        apply_dataframe(ts_sediment_scaling,node_types.ApplyScalingFactor,complete=False)
+        ts_sediment_delivery_ratios = compute_ts_sediment_delivery_ratios(gully_params)
+        apply_dataframe(ts_sediment_delivery_ratios,node_types.DeliveryRatio,complete=False)
 
+        fine_ts_conversion_factor = ts_sediment_delivery_ratios[ts_sediment_delivery_ratios.constituent==FINE_SEDIMENT]
+        apply_dataframe(fine_ts_conversion_factor,node_types.ApplyScalingFactor,complete=False)
 
         emc_dwc = self._load_param_csv('cg-' + SOURCE_EMC_MODEL)
         if emc_dwc is not None:
@@ -449,9 +464,11 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         sugarcane_p_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DissP_Gen_Model')
         if sugarcane_p_params is not None:
             sugarcane_p_params['PconcentrationMgPerL'] = 1e-3 * sugarcane_p_params['phos_saturation_index'].apply(
-                lambda psi: (7.5 * psi) if psi < 10.0 else (-200.0 * 27.5 * psi))
-            sugarcane_p_params['EMC'] = sugarcane_p_params['ProportionOfTotalP'] * sugarcane_p_params[
-                'Load_Conversion_Factor'] * sugarcane_p_params['DeliveryRatioAsPercent'] * PERCENT_TO_FRACTION
+                lambda psi: (7.5 * psi) if psi < 10.0 else (-200.0 + 27.5 * psi))
+            sugarcane_p_params['EMC'] = sugarcane_p_params['PconcentrationMgPerL'] * \
+                                        sugarcane_p_params['ProportionOfTotalP'] * \
+                                        sugarcane_p_params['Load_Conversion_Factor'] * \
+                                        sugarcane_p_params['DeliveryRatioAsPercent'] * PERCENT_TO_FRACTION
             apply_dataframe(sugarcane_p_params, node_types.EmcDwc,complete=False)
 
         # OLD
@@ -539,7 +556,8 @@ class SourceOpenwaterDynamicSednetMigrator(object):
     def build_ow_model(self,start='1986/07/01', end='2014/06/30',
                        link_renames=None,
                        progress=print):
-
+        init_timer('Build')
+        init_timer('Read structure data')
         network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
         network_veneer = _extend_network(self._load_json('network'))
 
@@ -583,27 +601,40 @@ class SourceOpenwaterDynamicSednetMigrator(object):
             for usle in usle_nodes:
                 g.add_edge(date_node, usle, src=['dayOfYear'], dest=['dayOfYear'])
 
+            gully_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] in ['DynamicSednetGullyAlt','DynamicSednetGully']]
+            for gully in gully_nodes:
+                g.add_edge(date_node, gully, src=['year'], dest=['year'])
+
             return g
 
+        report_time('Build template')
         catchment_template = self.build_catchment_template(meta)
+        report_time('Build graph')
         model = from_source.build_catchment_graph(catchment_template, network, progress=nop, custom_processing=setup_dates)
-        progress('Model graph built')
+        report_time('Build basic parameterisers')
 
         p = Parameteriser()
         p._parameterisers.append(DefaultParameteriser())
         p._parameterisers.append(self._date_parameteriser(meta))
+        report_time('Build climate parameteriser')
         p._parameterisers.append(self._climate_parameteriser(time_period))
+        report_time('Build fu area parameteriser')
         p._parameterisers.append(self._fu_areas_parameteriser())
+        report_time('Build runoff parameteriser')
         p._parameterisers.append(self._runoff_parameteriser())
+        report_time('Build generation parameteriser')
         p._parameterisers.append(self._constituent_generation_parameteriser(meta,cropping,time_period))
+        report_time('Build routing parameteriser')
 
         rp,routing_params = self._routing_parameteriser(link_renames)
         p._parameterisers.append(rp)
+        report_time('Build transport parameteriser')
         p._parameterisers.append(self._constituent_transport_parameteriser(link_renames,routing_params))
 
         model._parameteriser = p
         progress('Model parameterisation established')
-
+        close_timer()
+        close_timer()
         return model, meta, network
 
 def nop(*args,**kwargs):
