@@ -77,7 +77,7 @@ class SourceExtractor(object):
         network_df = network.as_dataframe()
 
         fu_areas = self.v.retrieve_csv('/tables/fus')
-        fu_areas = pd.DataFrame.from_csv(io.StringIO(fu_areas))
+        fu_areas = pd.read_csv(io.StringIO(fu_areas),index_col=0)
 
         self.write_json('constituents',constituents)
         self.write_json('fus',list(fus))
