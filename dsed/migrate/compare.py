@@ -40,7 +40,7 @@ class SourceOWComparison(object):
         self.link_outflow = self.results.time_series(routing,'outflow','catchment')
         self.comparison_flows = self.get_source_timeseries('downstream_flow_volume')
         self.comparison_flows = self.comparison_flows.rename(columns={c:c.replace('link for catchment ','') for c in self.comparison_flows.columns})
-        self.comparison_flows = self.comparison_flows / 86400.0
+        self.comparison_flows = self.comparison_flows * PER_DAY_TO_PER_SECOND
 
     def plot_flows(self,sc,time_period=None):
         import matplotlib.pyplot as plt
@@ -108,7 +108,7 @@ class SourceOWComparison(object):
         if c in self.meta['dissolved_nutrients']:
             return 'InstreamDissolvedNutrientDecay', 'loadDownstream'
         if c in self.meta['particulate_nutrients']:
-            return LCR
+            return 'InstreamParticulateNutrient', 'loadDownstream'
         if c == 'Sediment - Coarse':
             return 'InstreamCoarseSediment', 'loadDownstream'
         if c == 'Sediment - Fine':
@@ -157,8 +157,8 @@ class SourceOWComparison(object):
                         ow_sc = ow[sc]
                         orig_sc = fu_comparison['%s: %s'%(fu,sc)]
                         if ow_sc.sum()>0 or orig_sc.sum()>0:
-                            orig_scaled = (orig_sc*86400)
-                            ow_scaled = (ow_sc*86400)
+                            orig_scaled = (orig_sc*PER_SECOND_TO_PER_DAY)
+                            ow_scaled = (ow_sc*PER_SECOND_TO_PER_DAY)
                             res['ssquares'] = sum_squares(orig_scaled,ow_scaled)
                             _,_,r_value,_,_ = stats.linregress(orig_scaled,ow_scaled)
                             res['r-squared'] = r_value**2
@@ -291,8 +291,8 @@ class SourceOWComparison(object):
                 ow_sc = ow[sc]
                 orig_sc = comparison[sc]
                 if ow_sc.sum()>0 or orig_sc.sum()>0:
-                    orig_scaled = (orig_sc*86400)
-                    ow_scaled = (ow_sc*86400)
+                    orig_scaled = (orig_sc*PER_SECOND_TO_PER_DAY)
+                    ow_scaled = (ow_sc*PER_SECOND_TO_PER_DAY)
                     _,_,r_value,_,_ = stats.linregress(orig_scaled,ow_scaled)
                     res['r-squared'] = r_value**2
                     res['ssquares'] = sum_squares(orig_scaled,ow_scaled)

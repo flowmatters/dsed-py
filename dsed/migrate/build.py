@@ -17,6 +17,8 @@ from openwater.template import OWTemplate, TAG_MODEL,TAG_PROCESS
 from openwater.timing import init_timer, report_time, close_timer
 from veneer.general import _extend_network
 
+DEFAULT_START='1986/07/01'
+DEFAULT_END='2014/06/30'
 EXPECTED_LINK_PREFIX='link for catchment '
 SOURCE_EMC_MODEL='RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel'
 DS_SEDIMENT_MODEL='Dynamic_SedNet.Models.SedNet_Sediment_Generation'
@@ -73,15 +75,17 @@ def _rename_link_tag_columns(dataframe, link_renames, link_col='NetworkElement')
 
     return dataframe
 
-def build_ow_model(data_path, start='1986/07/01', end='2014/06/30',
+def build_ow_model(data_path, start=DEFAULT_START, end=DEFAULT_END,
                    link_renames=None,
+                   replay_hydro=False,
                    progress=print):
-    builder = SourceOpenwaterDynamicSednetMigrator(data_path)
+    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro)
     return builder.build_ow_model(start,end,link_renames,progress)
 
 class SourceOpenwaterDynamicSednetMigrator(object):
-    def __init__(self,data_path):
+    def __init__(self,data_path,replay_hydro=False):
         self.data_path = data_path
+        self.replay_hydro = replay_hydro
         global RR,ROUTING
         RR = node_types.Sacramento
         ROUTING = node_types.StorageRouting
@@ -198,13 +202,17 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         catchment_template.gully_cgus = meta['gully_cgus']
         catchment_template.sediment_fallback_cgu = meta['emc_cgus']
 
-        catchment_template.rr = RR
+        if self.replay_hydro:
+            catchment_template.rr = None
+            catchment_template.routing = None
+        else:
+            catchment_template.rr = RR
+            catchment_template.routing = ROUTING
 
         # def generation_model_for_constituent_and_fu(constituent, cgu=None):
         #     # progress(constituent,cgu)
         #     return default_cg[constituent]
 
-        catchment_template.routing = ROUTING
         return catchment_template
 
     def assess_meta_structure(self,start,end,cropping):
@@ -445,6 +453,8 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         apply_dataframe(dissolved_nutrient_params,node_types.SednetDissolvedNutrientGeneration,complete=False)
 
         part_nutrient_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Particulate')
+        # meta['particulate_nutrient_cgus'] = set(part_nutrient_params.cgu)
+        
         apply_dataframe(part_nutrient_params,node_types.SednetParticulateNutrientGeneration,complete=False)
 
         sugarcane_din_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel')
@@ -494,17 +504,21 @@ class SourceOpenwaterDynamicSednetMigrator(object):
             # fu areas should load
             #
             ts_load_params['scale'] = ts_load_params['Load_Conversion_Factor'] * ts_load_params['DeliveryRatio'] * PERCENT_TO_FRACTION
+            # ts_load_params['scale'] = ts_load_params['Load_Conversion_Factor']
+            # ts_load_params['fraction'] = ts_load_params['DeliveryRatio'] * PERCENT_TO_FRACTION
             apply_dataframe(ts_load_params, node_types.EmcDwc,complete=False)
             apply_dataframe(ts_load_params, node_types.ApplyScalingFactor,complete=False)
+            # apply_dataframe(ts_load_params, node_types.DeliveryRatio,complete=False)
 
         return res
 
     def _constituent_transport_parameteriser(self,link_renames,routing_params):
         res = NestedParameteriser()
 
-        lag_parameters = ParameterTableAssignment(lag_non_routing_links(routing_params), node_types.Lag,
-                                                  dim_columns=['catchment'], complete=False)
-        res.nested.append(lag_parameters)
+        if not self.replay_hydro:
+            lag_parameters = ParameterTableAssignment(lag_non_routing_links(routing_params), node_types.Lag,
+                                                    dim_columns=['catchment'], complete=False)
+            res.nested.append(lag_parameters)
 
         instream_fine_sediment_params = _rename_link_tag_columns(
             self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_Fine_Sediment_Model'), link_renames, 'Link')
@@ -547,13 +561,31 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         instream_fine_sed_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'InstreamFineSediment',
                                                                    dim_columns=['catchment'],complete=False)
         res.nested.append(instream_fine_sed_parameteriser)
+
         bank_erosion_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'BankErosion',
                                                               dim_columns=['catchment'],complete=False)
         res.nested.append(bank_erosion_parameteriser)
 
+        instream_particulate_nutrient_params = _rename_link_tag_columns(
+            self._load_param_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_ParticulateNut_Model'), link_renames, 'Link')
+        instream_particulate_nutrient_params = instream_particulate_nutrient_params.rename(columns={
+            'partNutConc':'particulateNutrientConcentration'
+        })
+        instream_particulate_parameteriser = \
+            ParameterTableAssignment(instream_particulate_nutrient_params,
+                                     'InstreamParticulateNutrient',
+                                     dim_columns=['catchment','constituent'])
+        res.nested.append(instream_particulate_parameteriser)
+
+        instream_particulate_sed_parameteriser = \
+            ParameterTableAssignment(instream_fine_sediment_params[['catchment','soilPercentFine']],
+                                     'InstreamParticulateNutrient',
+                                     dim_columns=['catchment'],complete=False)
+        res.nested.append(instream_particulate_sed_parameteriser)
+
         return res
 
-    def build_ow_model(self,start='1986/07/01', end='2014/06/30',
+    def build_ow_model(self,start=DEFAULT_START, end=DEFAULT_END,
                        link_renames=None,
                        progress=print):
         init_timer('Build')
@@ -563,13 +595,13 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         if link_renames is None:
             link_renames = map_link_name_mismatches(network_veneer)
-
         time_period = pd.date_range(start, end)
 
         cropping = self._load_csv('cropping')
         cropping = cropping.reindex(time_period)
 
         meta = self.assess_meta_structure(start,end,cropping)
+        meta['link_renames'] = link_renames
         print(meta)
         # return meta
         # cr_models = self._load_csv('transportmodels')
@@ -631,11 +663,59 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         report_time('Build transport parameteriser')
         p._parameterisers.append(self._constituent_transport_parameteriser(link_renames,routing_params))
 
+        if self.replay_hydro:
+            report_time('Build hydro time series parameteriser')
+            p._parameterisers.append(self.hydro_timeseries_inputter(link_renames))
+
         model._parameteriser = p
         progress('Model parameterisation established')
+        
         close_timer()
         close_timer()
         return model, meta, network
+
+    def hydro_timeseries_inputter(self,link_renames):
+        HRU_TEMPLATE='${cgu}: ${catchment}'
+        LINK_TEMPLATE='link for catchment ${catchment}'
+
+        i = DataframeInputs()
+
+        # 'Slow_Flow'
+        slow_flow = self._load_csv('Results/Slow_Flow')
+        i.inputter(slow_flow, 'baseflow', HRU_TEMPLATE,model='EmcDwc')
+        # i.inputter(slow_flow, 'baseflow', HRU_TEMPLATE,model='USLEFineSedimentGeneration')
+        i.inputter(slow_flow, 'slowflow', HRU_TEMPLATE,model='SednetParticulateNutrientGeneration')
+        # i.inputter(slow_flow, 'slowflow', HRU_TEMPLATE,model='SednetDissolvedNutrientGeneration')
+
+        quick_flow = self._load_csv('Results/Quick_Flow')
+        i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='EmcDwc')
+        # i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='USLEFineSedimentGeneration')
+        # i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='SednetDissolvedNutrientGeneration')
+        # i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='DynamicSednetGully')
+        # i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='DynamicSednetGullyAlt')
+
+        i.inputter(quick_flow,'flow',HRU_TEMPLATE,model='PassLoadIfFlow')
+        i.inputter(slow_flow,'flow',HRU_TEMPLATE,model='PassLoadIfFlow',constituent='NLeached')
+
+        ds_flow = self._load_csv('Results/downstream_flow_volume') * PER_DAY_TO_PER_SECOND
+        storage = self._load_csv('Results/storage_volume')
+
+        if len(link_renames):
+            ds_flow = ds_flow.rename(columns=link_renames)
+            storage = storage.rename(columns=link_renames)
+
+        i.inputter(ds_flow,'downstreamFlowVolume',LINK_TEMPLATE,model='BankErosion')
+
+        i.inputter(ds_flow,'outflow',LINK_TEMPLATE,model='InstreamFineSediment')
+        # i.inputter(ds_flow,'outflow',LINK_TEMPLATE,model='InstreamDissolvedNutrientDecay')
+        # i.inputter(ds_flow,'outflow',LINK_TEMPLATE,model='LumpedConstituentRouting')
+
+        i.inputter(storage,'totalVolume',LINK_TEMPLATE,model='BankErosion')
+        i.inputter(storage,'reachVolume',LINK_TEMPLATE,model='InstreamFineSediment')
+        # i.inputter(storage,'reachVolume',LINK_TEMPLATE,model='InstreamDissolvedNutrientDecay')
+        i.inputter(storage,'storage',LINK_TEMPLATE,model='LumpedConstituentRouting')
+        return i
+
 
 def nop(*args,**kwargs):
     pass
@@ -661,7 +741,7 @@ def lag_headwater_links(network):
     return lag_links(headwater_link_names)
 
 def lag_non_routing_links(params):
-    RC_THRESHOLD=1e-5
+    RC_THRESHOLD=5e-4  # was 1e-5
     links_to_lag = list(params[params.RoutingConstant<RC_THRESHOLD].catchment)
     #print('Links to lag',len(links_to_lag),links_to_lag)
     return lag_links(links_to_lag)
@@ -686,3 +766,4 @@ def map_link_name_mismatches(network):
     print(result)
 
     return result
+
