@@ -389,7 +389,7 @@ class DynamicSednetCatchment(object):
             self.transport[dn] = n.InstreamDissolvedNutrientDecay
         for pn in particulate_nutrients:
             self.cg[pn] = get_model_particulate_nutrient
-            # self.transport[pn] = n.InstreamParticulateNutrient
+            self.transport[pn] = n.InstreamParticulateNutrient
 
     def model_for(self,provider,*args,**kwargs):
         if hasattr(provider,'__call__'):
@@ -417,7 +417,9 @@ class DynamicSednetCatchment(object):
             reach_template.add_link(OWLink(routing_node,'outflow',bank_erosion,'downstreamFlowVolume'))
 
         dis_nut_models = []
+        par_nut_models = []
         fine_sed_model = None
+        fine_sed_con_lag_model = None
         for con in self.constituents:
             model_type = self.model_for(self.transport,con,*tag_values)
             constituent_lag_node = reach_template.add_node(n.Lag,process='FlowLag',constituent=con,**kwargs)
@@ -426,6 +428,7 @@ class DynamicSednetCatchment(object):
             transport_node = reach_template.add_node(model_type,process='ConstituentRouting',constituent=con,**kwargs)
 
             if model_type == n.InstreamFineSediment:
+                fine_sed_con_lag_model = constituent_lag_node
                 # reach_template.define_input(transport_node,'incomingMass','generatedLoad')
                 reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'incomingMass'))
                 if self.routing is not None:
@@ -453,6 +456,16 @@ class DynamicSednetCatchment(object):
 
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
 #            elif model_type == n.InstreamParticulateNutrient: TODO
+            elif model_type == n.InstreamParticulateNutrient:
+                par_nut_models.append(transport_node)
+                reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'incomingMassLateral'))
+                if self.routing is not None:
+                    reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
+                    reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
+                reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'streambankErosion'))
+                reach_template.add_link(OWLink(bank_erosion,'bankErosionCoarse',transport_node,'streambankErosion'))
+
+                reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
             else:
                 # Lumped constituent routing
                 # reach_template.define_input(transport_node,'lateralLoad','generatedLoad')
@@ -466,6 +479,11 @@ class DynamicSednetCatchment(object):
         if fine_sed_model is not None:
             for dnm in dis_nut_models:
                 reach_template.add_link(OWLink(fine_sed_model,'floodplainDepositionFraction',dnm,'floodplainDepositionFraction'))
+            for pnm in par_nut_models:
+                reach_template.add_link(OWLink(fine_sed_model,'floodplainDepositionFraction',pnm,'floodplainDepositionFraction'))
+                reach_template.add_link(OWLink(fine_sed_model,'channelDepositionFraction',pnm,'channelDepositionFraction'))
+                # reach_template.add_link(OWLink(fine_sed_model,'channelDepositionFraction',pnm,'channelDepositionFraction'))
+                reach_template.add_link(OWLink(fine_sed_con_lag_model,'outflow',pnm,'lateralSediment'))
 
         return reach_template
 
@@ -521,7 +539,8 @@ class DynamicSednetCatchment(object):
         STANDARD_LINKS = defaultdict(lambda:[None,None],{
             n.InstreamFineSediment.name: ('incomingMass','loadDownstream'),
             n.InstreamCoarseSediment.name: ('incomingMass','loadDownstream'),
-            n.InstreamDissolvedNutrientDecay.name: ('incomingMassUpstream','loadDownstream')
+            n.InstreamDissolvedNutrientDecay.name: ('incomingMassUpstream','loadDownstream'),
+            n.InstreamParticulateNutrient.name: ('incomingMassUpstream','loadDownstream')
         })
 
         if (self._g == None)  or (self._g != graph):
