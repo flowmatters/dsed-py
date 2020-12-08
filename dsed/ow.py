@@ -430,20 +430,20 @@ class DynamicSednetCatchment(object):
             if model_type == n.InstreamFineSediment:
                 fine_sed_con_lag_model = constituent_lag_node
                 # reach_template.define_input(transport_node,'incomingMass','generatedLoad')
-                reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'incomingMass'))
+                reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'lateralMass'))
                 if self.routing is not None:
                     reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
                     reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
 
-                reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'incomingMass'))
+                reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'reachLocalMass'))
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
                 fine_sed_model = transport_node
 
             elif model_type == n.InstreamCoarseSediment:
                 # reach_template.define_input(transport_node,'incomingMass','generatedLoad')
-                reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'incomingMass'))
+                reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'lateralMass'))
 
-                reach_template.add_link(OWLink(bank_erosion,'bankErosionCoarse',transport_node,'incomingMass'))
+                reach_template.add_link(OWLink(bank_erosion,'bankErosionCoarse',transport_node,'reachLocalMass'))
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
 
             elif model_type == n.InstreamDissolvedNutrientDecay:
@@ -537,8 +537,8 @@ class DynamicSednetCatchment(object):
 
     def link_catchments(self,graph,upstream,downstream):
         STANDARD_LINKS = defaultdict(lambda:[None,None],{
-            n.InstreamFineSediment.name: ('incomingMass','loadDownstream'),
-            n.InstreamCoarseSediment.name: ('incomingMass','loadDownstream'),
+            n.InstreamFineSediment.name: ('upstreamMass','loadDownstream'),
+            n.InstreamCoarseSediment.name: ('upstreamMass','loadDownstream'),
             n.InstreamDissolvedNutrientDecay.name: ('incomingMassUpstream','loadDownstream'),
             n.InstreamParticulateNutrient.name: ('incomingMassUpstream','loadDownstream')
         })
