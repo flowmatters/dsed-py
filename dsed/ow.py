@@ -105,20 +105,33 @@ class DynamicSednetCGU(object):
         cgu = kwargs.get('cgu','?')
         template = OWTemplate('cgu:%s'%cgu)
 
-        runoff_scale_node = template.add_node(n.DepthToRate,process='ArealScale',component='Runoff',**kwargs)
-        quickflow_scale_node = template.add_node(n.DepthToRate,process='ArealScale',component='Quickflow',**kwargs)
-        baseflow_scale_node = template.add_node(n.DepthToRate,process='ArealScale',component='Baseflow',**kwargs)
+        runoff_scale_node = None
+        quickflow_scale_node = None
+        baseflow_scale_node = None
+        if catchment_template.rr is not None:
+            runoff_scale_node = template.add_node(n.DepthToRate,process='ArealScale',component='Runoff',**kwargs)
+            quickflow_scale_node = template.add_node(n.DepthToRate,process='ArealScale',component='Quickflow',**kwargs)
+            baseflow_scale_node = template.add_node(n.DepthToRate,process='ArealScale',component='Baseflow',**kwargs)
+
+        def link_runoff(dest_node,qf_input,bf_input):
+            if quickflow_scale_node is None:
+                return
+            if qf_input is not None:
+                template.add_link(OWLink(quickflow_scale_node,'outflow',dest_node,qf_input))
+
+            if bf_input is not None:
+                template.add_link(OWLink(baseflow_scale_node,'outflow',dest_node,bf_input))
 
         def add_emc_dwc(con):
             dwc_node = template.add_node(n.EmcDwc,process='ConstituentDryWeatherGeneration',constituent=con,**kwargs)
-            template.add_link(OWLink(quickflow_scale_node,'outflow',dwc_node,'quickflow'))
-            template.add_link(OWLink(baseflow_scale_node,'outflow',dwc_node,'baseflow'))
+            link_runoff(dwc_node,'quickflow','baseflow')
             return dwc_node
 
-        template.define_input(runoff_scale_node,'input','runoff')
-        template.define_input(quickflow_scale_node,'input','quickflow')
-        template.define_input(baseflow_scale_node,'input','baseflow')
-        template.define_output(runoff_scale_node,'outflow','lateral')
+        if runoff_scale_node is not None:
+            template.define_input(runoff_scale_node,'input','runoff')
+            template.define_input(quickflow_scale_node,'input','quickflow')
+            template.define_input(baseflow_scale_node,'input','baseflow')
+            template.define_output(runoff_scale_node,'outflow','lateral')
         # This should be able to be done automatically... any input not defined
 
         hillslope_fine_sed_gen = None
@@ -133,8 +146,7 @@ class DynamicSednetCGU(object):
         if self.hillslope_cgu:
             # Hillslope
             sed_gen = template.add_node(n.USLEFineSedimentGeneration,process="HillslopeGeneration",**kwargs)
-            template.add_link(OWLink(quickflow_scale_node,'outflow',sed_gen,'quickflow'))
-            template.add_link(OWLink(baseflow_scale_node,'outflow',sed_gen,'baseflow'))
+            link_runoff(sed_gen,'quickflow','baseflow')
 
             hillslope_fine_sed_gen = sed_gen
             hillslope_coarse_sed_gen = sed_gen
@@ -144,7 +156,7 @@ class DynamicSednetCGU(object):
         if self.gully_cgu:
             # Gully
             gully_gen = template.add_node(n.DynamicSednetGullyAlt,process="GullyGeneration",**kwargs)
-            template.add_link(OWLink(quickflow_scale_node,'outflow',gully_gen,'quickflow'))
+            link_runoff(gully_gen,'quickflow',None)
 
             fine_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=FINE_SEDIMENT,**kwargs)
             coarse_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=COARSE_SEDIMENT,**kwargs)
@@ -164,7 +176,7 @@ class DynamicSednetCGU(object):
 
                 if self.cropping_cgu:
                     ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=FINE_SEDIMENT,**kwargs)
-                    template.add_link(OWLink(quickflow_scale_node,'outflow',ts_node,'flow'))
+                    link_runoff(ts_node,'flow',None)
 
                     ts_split_node = template.add_node(n.FixedPartition,process='FineCoarseSplit',**kwargs)
                     template.add_link(OWLink(ts_node,'outputLoad',ts_split_node,'input'))
@@ -213,7 +225,7 @@ class DynamicSednetCGU(object):
                 dwc_node = add_emc_dwc(con)
 
                 ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=con,**kwargs)
-                template.add_link(OWLink(quickflow_scale_node,'outflow',ts_node,'flow'))
+                link_runoff(ts_node,'flow',None)
 
                 sum_node = template.add_node(n.Sum,process='ConstituentGeneration',constituent=con,**kwargs)
                 template.add_link(OWLink(dwc_node,'totalLoad',sum_node,'i1'))
@@ -236,7 +248,7 @@ class DynamicSednetCGU(object):
 
             if ts_cane_din or ts_crop_part_p or ts_load_with_dwc:
                 ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=con,**kwargs)
-                template.add_link(OWLink(quickflow_scale_node,'outflow',ts_node,'flow'))
+                link_runoff(ts_node,'flow',None)
 
                 ts_scale_node = template.add_node(n.ApplyScalingFactor,process='ConstituentScaling',constituent=con,**kwargs)
                 template.add_link(OWLink(ts_node,'outputLoad',ts_scale_node,'input'))
@@ -249,7 +261,7 @@ class DynamicSednetCGU(object):
 
                 if ts_cane_din:
                     leached_ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent='NLeached',**kwargs)
-                    template.add_link(OWLink(baseflow_scale_node,'outflow',leached_ts_node,'flow'))
+                    link_runoff(leached_ts_node,None,'flow')
 
                     leached_ts_scale_node = template.add_node(n.ApplyScalingFactor,process='ConstituentScaling',constituent='NLeached',**kwargs)
                     template.add_link(OWLink(leached_ts_node,'outputLoad',leached_ts_scale_node,'input'))
@@ -265,8 +277,9 @@ class DynamicSednetCGU(object):
                 continue
 
             gen_node = template.add_node(model,process='ConstituentGeneration',constituent=con,**kwargs)
-            template.add_conditional_link(quickflow_scale_node,'outflow',gen_node,QUICKFLOW_INPUTS,model)
-            template.add_conditional_link(baseflow_scale_node, 'outflow',gen_node,BASEFLOW_INPUTS,model)
+            if quickflow_scale_node is not None:
+                template.add_conditional_link(quickflow_scale_node,'outflow',gen_node,QUICKFLOW_INPUTS,model)
+                template.add_conditional_link(baseflow_scale_node, 'outflow',gen_node,BASEFLOW_INPUTS,model)
 
             if model.name == 'SednetParticulateNutrientGeneration':
                 template.add_link(OWLink(gully_gen,'generatedFine',gen_node,'fineSedModelFineGullyGeneratedKg'))
@@ -389,16 +402,19 @@ class DynamicSednetCatchment(object):
         tag_values = list(kwargs.values())
         reach_template = OWTemplate('reach')
 
-        lag_node = reach_template.add_node(n.Lag,process='FlowLag',constituent='_flow',**kwargs)
-        reach_template.define_input(lag_node,'inflow','lateral')
+        routing_node = None
+        if self.routing is not None:
+            lag_node = reach_template.add_node(n.Lag,process='FlowLag',constituent='_flow',**kwargs)
+            reach_template.define_input(lag_node,'inflow','lateral')
 
-        routing_node = reach_template.add_node(self.routing,process='FlowRouting',**kwargs)
-        reach_template.add_link(OWLink(lag_node,'outflow',routing_node,'lateral'))
-        reach_template.define_output(routing_node,'outflow')
+            routing_node = reach_template.add_node(self.routing,process='FlowRouting',**kwargs)
+            reach_template.add_link(OWLink(lag_node,'outflow',routing_node,'lateral'))
+            reach_template.define_output(routing_node,'outflow')
 
         bank_erosion = reach_template.add_node(n.BankErosion,process='BankErosion',**kwargs)
-        reach_template.add_link(OWLink(routing_node,'storage',bank_erosion,'totalVolume'))
-        reach_template.add_link(OWLink(routing_node,'outflow',bank_erosion,'downstreamFlowVolume'))
+        if routing_node is not None:
+            reach_template.add_link(OWLink(routing_node,'storage',bank_erosion,'totalVolume'))
+            reach_template.add_link(OWLink(routing_node,'outflow',bank_erosion,'downstreamFlowVolume'))
 
         dis_nut_models = []
         fine_sed_model = None
@@ -412,8 +428,9 @@ class DynamicSednetCatchment(object):
             if model_type == n.InstreamFineSediment:
                 # reach_template.define_input(transport_node,'incomingMass','generatedLoad')
                 reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'incomingMass'))
-                reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
-                reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
+                if self.routing is not None:
+                    reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
+                    reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
 
                 reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'incomingMass'))
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
@@ -430,8 +447,9 @@ class DynamicSednetCatchment(object):
                 dis_nut_models.append(transport_node)
                 # reach_template.define_input(transport_node,'incomingMassLateral','generatedLoad')
                 reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'incomingMassLateral'))
-                reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
-                reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
+                if self.routing is not None:
+                    reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
+                    reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
 
                 reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
 #            elif model_type == n.InstreamParticulateNutrient: TODO
@@ -440,8 +458,9 @@ class DynamicSednetCatchment(object):
                 # reach_template.define_input(transport_node,'lateralLoad','generatedLoad')
                 reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'lateralLoad'))
                 # reach_template.add_link(OWLink(lag_node,'outflow',transport_node,'inflow')) # inflow removed from LumpedConstituentRouting. Unused
-                reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
-                reach_template.add_link(OWLink(routing_node,'storage',transport_node,'storage'))
+                if self.routing is not None:
+                    reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
+                    reach_template.add_link(OWLink(routing_node,'storage',transport_node,'storage'))
                 reach_template.define_output(transport_node,'outflowLoad')
 
         if fine_sed_model is not None:
@@ -476,14 +495,15 @@ class DynamicSednetCatchment(object):
 
         hrus={}
         for hru in self.hrus:
-            runoff_template = OWTemplate('runoff:%s'%hru)
-
-            runoff_node = runoff_template.add_node(self.model_for(self.rr,hru,*tag_values),process='RR',hru=hru,**kwargs)
-            runoff_template.define_output(runoff_node,'runoff')
-            runoff_template.define_output(runoff_node,'surfaceRunoff','quickflow')
-            runoff_template.define_output(runoff_node,'baseflow')
             hru_template = OWTemplate('hru:%s'%hru)
-            hru_template.nest(runoff_template)
+
+            if self.rr is not None:
+                runoff_template = OWTemplate('runoff:%s'%hru)
+                runoff_node = runoff_template.add_node(self.model_for(self.rr,hru,*tag_values),process='RR',hru=hru,**kwargs)
+                runoff_template.define_output(runoff_node,'runoff')
+                runoff_template.define_output(runoff_node,'surfaceRunoff','quickflow')
+                runoff_template.define_output(runoff_node,'baseflow')
+                hru_template.nest(runoff_template)
             hrus[hru] = hru_template
             template.nest(hru_template)
 
@@ -515,6 +535,7 @@ class DynamicSednetCatchment(object):
                 if nn.startswith(nm):
                     self._g_lookup[nm] = nn
                     return nn
+            return None
             
         linkages = [('%s-FlowRouting','outflow','inflow')] + \
                    [('%%s-ConstituentRouting-%s'%c,'outflowLoad','inflowLoad') for c in self.constituents]
@@ -525,6 +546,9 @@ class DynamicSednetCatchment(object):
             src_node = match_node(src_node)#[n for n in graph.nodes if n.startswith(src_node)][0]
             dest_node = match_node(dest_node)#[n for n in graph.nodes if n.startswith(dest_node)][0]
 
+            if (src_node is None) and (dest_node is None):
+                # If both are missing then assume process is not being modelled
+                continue
             src_model = graph.nodes[src_node][TAG_MODEL]
             dest_model = graph.nodes[dest_node][TAG_MODEL]
             src = STANDARD_LINKS[src_model][1] or src
