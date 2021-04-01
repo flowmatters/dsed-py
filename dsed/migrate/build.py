@@ -3,6 +3,7 @@ import json
 
 from functools import reduce
 
+import numpy as np
 import pandas as pd
 import geopandas as gpd
 from dsed.ow import DynamicSednetCatchment, FINE_SEDIMENT, COARSE_SEDIMENT
@@ -585,13 +586,44 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         return res
 
+    def _demand_parameteriser(self):
+        nodes = self.network['features'].find_by_feature_type('node')
+        water_users = nodes.find_by_icon('/resources/WaterUserNodeModel')
+        demands = pd.DataFrame()
+        for wu in water_users:
+            wu_name = wu['properties']['name']
+            us_links = self.network.upstream_links(wu['properties']['id'])
+            assert len(us_links)==1
+            extraction_node_id = us_links[0]['properties']['from_node']
+            extraction_node = nodes.find_by_id(extraction_node_id)[0]
+            extraction_node_name = extraction_node['properties']['name']
+            demand = self._load_csv(f'timeseries-demand-{wu_name}')
+
+            if demand is None:
+                demand = np.array(self._load_csv(f'monthly-pattern-demand-{wu_name}').volume)
+                month_ts = self.time_period.month-1
+                demand = demand[month_ts]
+                demand = pd.DataFrame({'TSO':demand},index=self.time_period)
+            else:
+                demand = demand.reindex(self.time_period)
+
+            print(wu_name,extraction_node_name)
+            print(demand.columns)
+            demands[extraction_node_name] = demand['TSO']
+
+        demands = demands
+        i = DataframeInputs()
+        i.inputter(demands, 'demand', '${node}', model='PartitionDemand')
+
+        return i
+
     def build_ow_model(self,start=DEFAULT_START, end=DEFAULT_END,
                        link_renames=None,
                        progress=print):
         init_timer('Build')
         init_timer('Read structure data')
         network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
-        network_veneer = _extend_network(self._load_json('network'))
+        self.network = _extend_network(self._load_json('network'))
 
         if link_renames is None:
             link_renames = map_link_name_mismatches(network_veneer)
@@ -662,6 +694,9 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         p._parameterisers.append(rp)
         report_time('Build transport parameteriser')
         p._parameterisers.append(self._constituent_transport_parameteriser(link_renames,routing_params))
+
+        # report_time('Build demand parameteriser')
+        # p._parameterisers.append(self._demand_parameteriser())
 
         if self.replay_hydro:
             report_time('Build hydro time series parameteriser')
