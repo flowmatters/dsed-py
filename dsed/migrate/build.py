@@ -294,9 +294,9 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         return DefaultParameteriser(node_types.DateGenerator, startYear=date_components[0],
                                     startMonth=date_components[1], startDate=date_components[2])
 
-    def _climate_parameteriser(self,time_period):
+    def _climate_parameteriser(self):
         orig_climate = self._load_csv('climate')
-        climate_ts = orig_climate.reindex(time_period)
+        climate_ts = orig_climate.reindex(self.time_period)
         i = DataframeInputs()
         i.inputter(climate_ts, 'rainfall', 'rainfall for ${catchment}')
         i.inputter(climate_ts, 'pet', 'pet for ${catchment}')
@@ -328,7 +328,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         routing_params = _rename_link_tag_columns(self._load_csv('routing_params'), link_renames)
         return ParameterTableAssignment(routing_params, ROUTING, dim_columns=['catchment']),routing_params
 
-    def _constituent_generation_parameteriser(self,meta,cropping,time_period):
+    def _constituent_generation_parameteriser(self,meta,cropping):
         res = NestedParameteriser()
 
         def apply_dataframe(df,model,complete=True):
@@ -343,7 +343,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         # TODO NEED TO SCALE BY AREA!
         res.nested.append(cropping_inputs)
 
-        usle_timeseries = self._load_csv('usle_timeseries').reindex(time_period)
+        usle_timeseries = self._load_csv('usle_timeseries').reindex(self.time_period)
         usle_timeseries = usle_timeseries.fillna(method='ffill')
         fine_sediment_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Sediment_Generation')
         assert set(fine_sediment_params.useAvModel) == {False}
@@ -406,7 +406,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
                                                     dim_columns=['catchment', 'cgu'])
         res.nested.append(gully_parameters)
 
-        gully_timeseries = self._load_csv('gully_timeseries').reindex(time_period, method='ffill')
+        gully_timeseries = self._load_csv('gully_timeseries').reindex(self.time_period, method='ffill')
         gully_inputs = DataframeInputs()
         gully_ts_columns = ['Annual Load', 'Annual Runoff']
         gully_ts_destinations = ['annualLoad', 'AnnualRunoff']
@@ -626,11 +626,11 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         self.network = _extend_network(self._load_json('network'))
 
         if link_renames is None:
-            link_renames = map_link_name_mismatches(network_veneer)
-        time_period = pd.date_range(start, end)
+            link_renames = map_link_name_mismatches(self.network)
+        self.time_period = pd.date_range(start, end)
 
         cropping = self._load_csv('cropping')
-        cropping = cropping.reindex(time_period)
+        cropping = cropping.reindex(self.time_period)
 
         meta = self.assess_meta_structure(start,end,cropping)
         meta['link_renames'] = link_renames
@@ -681,13 +681,13 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         p._parameterisers.append(DefaultParameteriser())
         p._parameterisers.append(self._date_parameteriser(meta))
         report_time('Build climate parameteriser')
-        p._parameterisers.append(self._climate_parameteriser(time_period))
+        p._parameterisers.append(self._climate_parameteriser())
         report_time('Build fu area parameteriser')
         p._parameterisers.append(self._fu_areas_parameteriser())
         report_time('Build runoff parameteriser')
         p._parameterisers.append(self._runoff_parameteriser())
         report_time('Build generation parameteriser')
-        p._parameterisers.append(self._constituent_generation_parameteriser(meta,cropping,time_period))
+        p._parameterisers.append(self._constituent_generation_parameteriser(meta,cropping))
         report_time('Build routing parameteriser')
 
         rp,routing_params = self._routing_parameteriser(link_renames)
@@ -716,13 +716,13 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         i = DataframeInputs()
 
         # 'Slow_Flow'
-        slow_flow = self._load_csv('Results/Slow_Flow')
+        slow_flow = self._load_csv('Results/Slow_Flow').reindex(self.time_period)
         i.inputter(slow_flow, 'baseflow', HRU_TEMPLATE,model='EmcDwc')
         # i.inputter(slow_flow, 'baseflow', HRU_TEMPLATE,model='USLEFineSedimentGeneration')
         i.inputter(slow_flow, 'slowflow', HRU_TEMPLATE,model='SednetParticulateNutrientGeneration')
         # i.inputter(slow_flow, 'slowflow', HRU_TEMPLATE,model='SednetDissolvedNutrientGeneration')
 
-        quick_flow = self._load_csv('Results/Quick_Flow')
+        quick_flow = self._load_csv('Results/Quick_Flow').reindex(self.time_period)
         i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='EmcDwc')
         # i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='USLEFineSedimentGeneration')
         # i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='SednetDissolvedNutrientGeneration')
@@ -732,8 +732,8 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         i.inputter(quick_flow,'flow',HRU_TEMPLATE,model='PassLoadIfFlow')
         i.inputter(slow_flow,'flow',HRU_TEMPLATE,model='PassLoadIfFlow',constituent='NLeached')
 
-        ds_flow = self._load_csv('Results/downstream_flow_volume') * PER_DAY_TO_PER_SECOND
-        storage = self._load_csv('Results/storage_volume')
+        ds_flow = self._load_csv('Results/downstream_flow_volume').reindex(self.time_period) * PER_DAY_TO_PER_SECOND
+        storage = self._load_csv('Results/storage_volume').reindex(self.time_period)
 
         if len(link_renames):
             ds_flow = ds_flow.rename(columns=link_renames)
