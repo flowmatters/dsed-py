@@ -5,6 +5,7 @@ from openwater import OWTemplate, OWLink
 from openwater.template import TAG_MODEL
 import openwater.nodes as n
 from collections import defaultdict
+from openwater.examples.from_source import get_default_node_template
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 
@@ -536,24 +537,7 @@ class DynamicSednetCatchment(object):
         return template
 
     def get_node_template(self,node_type,**kwargs):
-        template = OWTemplate(node_type)
-
-        if node_type=='Extraction':
-            demand = template.add_node(n.PartitionDemand,process='demand',**kwargs)
-            prop = template.add_node(n.ComputeProportion,process='demand_proportion',**kwargs)
-            template.add_link(OWLink(demand,'extraction',prop,'numerator'))
-            for con in self.constituents:
-                con_ext = template.add_node(n.VariablePartition,process='constituent_extraction',constituent=con,**kwargs)
-                template.add_link(OWLink(prop,'proportion',con_ext,'fraction'))
-        else:
-            raise Exception(f'Unsupported node: {node_type} at {kwargs.get("node","unnamed node")}')
-        # elif node_type=='Storage':
-        #     storage = template.add_node(n.Storage,process='storage',**kwargs)
-        #     for con in self.constituents:
-        #         con_ext = template.add_node(n.???,process='extraction',constituent=con,**kwargs)
-        #         template.add_link(storage,'proportion',con_ext,'fraction')
-
-        return template
+        return get_default_node_template(node_type,constituents=self.constituents,**kwargs)
 
     def link_catchments(self,graph,upstream,downstream):
         STANDARD_LINKS = defaultdict(lambda:[None,None],{
