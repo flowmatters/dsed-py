@@ -6,6 +6,9 @@ from openwater.template import TAG_MODEL
 import openwater.nodes as n
 from collections import defaultdict
 from openwater.examples.from_source import get_default_node_template
+from openwater.catchments import \
+    DOWNSTREAM_FLOW_FLUX, DOWNSTREAM_LOAD_FLUX, \
+    UPSTREAM_FLOW_FLUX, UPSTREAM_LOAD_FLUX
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 
@@ -96,6 +99,7 @@ class DynamicSednetCGU(object):
         self.hillslope_cgu = hillslope_cgu
         self.sediment_fallback_model = sediment_fallback_model
         self.ts_load_with_dwc = ts_load_with_dwc
+
         assert (not bool(gully_cgu)) or (not bool(sediment_fallback_model))
 
     def generation_model(self,constituent,catchment_template,**kwargs):
@@ -399,7 +403,7 @@ class DynamicSednetCatchment(object):
             return self.model_for(provider[args[0]],*args,**kwargs)
         return provider
 
-    def reach_template(self,**kwargs):
+    def get_link_template(self,**kwargs) -> OWTemplate:
         tag_values = list(kwargs.values())
         reach_template = OWTemplate('reach')
 
@@ -412,6 +416,9 @@ class DynamicSednetCatchment(object):
             reach_template.add_link(OWLink(lag_node,'outflow',routing_node,'lateral'))
             reach_template.define_output(routing_node,'outflow')
 
+            reach_template.define_input(routing_node,'inflow',UPSTREAM_FLOW_FLUX,**kwargs)
+            reach_template.define_output(routing_node,'outflow',DOWNSTREAM_FLOW_FLUX,**kwargs)
+
         bank_erosion = reach_template.add_node(n.BankErosion,process='BankErosion',**kwargs)
         if routing_node is not None:
             reach_template.add_link(OWLink(routing_node,'storage',bank_erosion,'totalVolume'))
@@ -421,6 +428,10 @@ class DynamicSednetCatchment(object):
         par_nut_models = []
         fine_sed_model = None
         fine_sed_con_lag_model = None
+            # n.InstreamFineSediment.name: ('upstreamMass','loadDownstream'),
+            # n.InstreamCoarseSediment.name: ('upstreamMass','loadDownstream'),
+            # n.InstreamDissolvedNutrientDecay.name: ('incomingMassUpstream','loadDownstream'),
+            # n.InstreamParticulateNutrient.name: ('incomingMassUpstream','loadDownstream')
         for con in self.constituents:
             model_type = self.model_for(self.transport,con,*tag_values)
             constituent_lag_node = reach_template.add_node(n.Lag,process='FlowLag',constituent=con,**kwargs)
@@ -437,7 +448,8 @@ class DynamicSednetCatchment(object):
                     reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
 
                 reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'reachLocalMass'))
-                reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
+                load_out_flux = 'loadDownstream'
+                load_in_flux = 'upstreamMass'
                 fine_sed_model = transport_node
 
             elif model_type == n.InstreamCoarseSediment:
@@ -445,7 +457,8 @@ class DynamicSednetCatchment(object):
                 reach_template.add_link(OWLink(constituent_lag_node,'outflow',transport_node,'lateralMass'))
 
                 reach_template.add_link(OWLink(bank_erosion,'bankErosionCoarse',transport_node,'reachLocalMass'))
-                reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
+                load_out_flux = 'loadDownstream'
+                load_in_flux = 'upstreamMass'
 
             elif model_type == n.InstreamDissolvedNutrientDecay:
                 dis_nut_models.append(transport_node)
@@ -455,7 +468,9 @@ class DynamicSednetCatchment(object):
                     reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
                     reach_template.add_link(OWLink(routing_node,'storage',transport_node,'reachVolume'))
 
-                reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
+                load_out_flux = 'loadDownstream'
+                load_in_flux = 'incomingMassUpstream'
+
 #            elif model_type == n.InstreamParticulateNutrient: TODO
             elif model_type == n.InstreamParticulateNutrient:
                 par_nut_models.append(transport_node)
@@ -466,7 +481,8 @@ class DynamicSednetCatchment(object):
                 reach_template.add_link(OWLink(bank_erosion,'bankErosionFine',transport_node,'streambankErosion'))
                 reach_template.add_link(OWLink(bank_erosion,'bankErosionCoarse',transport_node,'streambankErosion'))
 
-                reach_template.define_output(transport_node,'loadDownstream','outflowLoad')
+                load_out_flux = 'loadDownstream'
+                load_in_flux = 'incomingMassUpstream'
             else:
                 # Lumped constituent routing
                 # reach_template.define_input(transport_node,'lateralLoad','generatedLoad')
@@ -475,7 +491,11 @@ class DynamicSednetCatchment(object):
                 if self.routing is not None:
                     reach_template.add_link(OWLink(routing_node,'outflow',transport_node,'outflow'))
                     reach_template.add_link(OWLink(routing_node,'storage',transport_node,'storage'))
-                reach_template.define_output(transport_node,'outflowLoad')
+                load_out_flux = 'outflowLoad'
+                load_in_flux = 'inflowLoad'
+
+            reach_template.define_output(transport_node,load_out_flux,DOWNSTREAM_LOAD_FLUX,constituent=con,**kwargs)
+            reach_template.define_input(transport_node,load_in_flux,UPSTREAM_LOAD_FLUX,constituent=con,**kwargs)
 
         if fine_sed_model is not None:
             for dnm in dis_nut_models:
@@ -532,7 +552,7 @@ class DynamicSednetCatchment(object):
             cgu_template = cgu_builder.get_template(self,cgu=cgu,**kwargs)
             hrus[hru].nest(cgu_template)
 
-        template.nest(self.reach_template(**kwargs))
+        template.nest(self.get_link_template(**kwargs))
 
         return template
 
