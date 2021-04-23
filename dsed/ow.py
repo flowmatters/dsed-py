@@ -332,6 +332,7 @@ class DynamicSednetCatchment(object):
         self.gully_cgus = None
         self.sediment_fallback_cgu = None
         self.ts_load_with_dwc = ts_load_with_dwc
+        self.climate_inputs = ['rainfall','pet']
 
         self.rr = n.Sacramento
         self.cg = defaultdict(lambda:n.EmcDwc,{})
@@ -531,6 +532,7 @@ class DynamicSednetCatchment(object):
     def get_template(self,**kwargs):
         tag_values = list(kwargs.values())
         template = OWTemplate('catchment')
+        climate_nodes = {cvar: template.add_node(n.Input,process='input',variable=cvar,**kwargs) for cvar in self.climate_inputs}
 
         hrus={}
         for hru in self.hrus:
@@ -539,6 +541,10 @@ class DynamicSednetCatchment(object):
             if self.rr is not None:
                 runoff_template = OWTemplate('runoff:%s'%hru)
                 runoff_node = runoff_template.add_node(self.model_for(self.rr,hru,*tag_values),process='RR',hru=hru,**kwargs)
+
+                for clim_var, clim_node in climate_nodes.items():
+                    template.add_link(OWLink(clim_node,'output',runoff_node,clim_var))
+
                 runoff_template.define_output(runoff_node,'runoff')
                 runoff_template.define_output(runoff_node,'surfaceRunoff','quickflow')
                 runoff_template.define_output(runoff_node,'baseflow')

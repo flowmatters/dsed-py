@@ -298,8 +298,8 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         orig_climate = self._load_csv('climate')
         climate_ts = orig_climate.reindex(self.time_period)
         i = DataframeInputs()
-        i.inputter(climate_ts, 'rainfall', 'rainfall for ${catchment}')
-        i.inputter(climate_ts, 'pet', 'pet for ${catchment}')
+        for v in ['rainfall','pet']:
+            i.inputter(climate_ts,'input','%s for ${catchment}'%v,node_types.Input,variable=v)
         return i
 
     def _fu_areas_parameteriser(self):
