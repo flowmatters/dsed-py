@@ -623,7 +623,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         p = NestedParameteriser()
 
         # Load storage meta, identify outlets
-        storage_tables = merge_storage_tables(self.data_path)
+        storage_tables = from_source.merge_storage_tables(self.data_path)
 
         storage_parameters = LoadArraysParameters(storage_tables,'${node_name}','nLVA',model='Storage')
         p.append(storage_parameters)
