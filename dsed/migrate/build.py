@@ -12,7 +12,9 @@ from .const import *
 import openwater.nodes as node_types
 from openwater.examples import from_source
 from openwater import debugging
-from openwater.config import Parameteriser, ParameterTableAssignment, DataframeInputs, DefaultParameteriser, NestedParameteriser
+from openwater.config import Parameteriser, ParameterTableAssignment, \
+    DataframeInputs, DefaultParameteriser, NestedParameteriser, \
+    LoadArraysParameters
 import openwater.template as templating
 from openwater.template import OWTemplate, TAG_MODEL,TAG_PROCESS
 from openwater.timing import init_timer, report_time, close_timer
@@ -617,6 +619,17 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         return i
 
+    def _storage_parameteriser(self):
+        p = NestedParameteriser()
+
+        # Load storage meta, identify outlets
+        storage_tables = merge_storage_tables(self.data_path)
+
+        storage_parameters = LoadArraysParameters(storage_tables,'${node_name}','nLVA',model='Storage')
+        p.append(storage_parameters)
+
+        return p
+
     def build_ow_model(self,start=DEFAULT_START, end=DEFAULT_END,
                        link_renames=None,
                        progress=print):
@@ -695,6 +708,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         report_time('Build transport parameteriser')
         p._parameterisers.append(self._constituent_transport_parameteriser(link_renames,routing_params))
 
+        p._parameterisers.append(self._storage_parameteriser())
         # report_time('Build demand parameteriser')
         # p._parameterisers.append(self._demand_parameteriser())
 
