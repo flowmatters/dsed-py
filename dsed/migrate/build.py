@@ -111,6 +111,10 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         return pd.read_csv(fn, index_col=0, parse_dates=True)
 
+    def _load_time_series_csv(self,f):
+        df = self._load_csv(f)
+        return df.reindex(self.time_period)
+
     def _load_param_csv(self,f):
         df = self._load_csv(f)
         if df is None:
@@ -303,8 +307,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
                                     startMonth=date_components[1], startDate=date_components[2])
 
     def _climate_parameteriser(self):
-        orig_climate = self._load_csv('climate')
-        climate_ts = orig_climate.reindex(self.time_period)
+        climate_ts = self._load_time_series_csv('climate')
         i = DataframeInputs()
         for v in ['rainfall','pet']:
             i.inputter(climate_ts,'input','%s for ${catchment}'%v,node_types.Input,variable=v)
@@ -351,7 +354,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         # TODO NEED TO SCALE BY AREA!
         res.nested.append(cropping_inputs)
 
-        usle_timeseries = self._load_csv('usle_timeseries').reindex(self.time_period)
+        usle_timeseries = self._load_time_series_csv('usle_timeseries')
         usle_timeseries = usle_timeseries.fillna(method='ffill')
         fine_sediment_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Sediment_Generation')
         assert set(fine_sediment_params.useAvModel) == {False}
@@ -649,7 +652,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
                                                  dim_columns=['node_name'],
                                                  complete=True))
 
-        storage_climate = self._load_csv('storage_climate')
+        storage_climate = self._load_time_series_csv('storage_climate')
         storage_climate = storage_climate.rename(columns=_rename_storage_variable)
 
         storage_climate_inputs = DataframeInputs()
@@ -671,8 +674,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
             link_renames = map_link_name_mismatches(self.network)
         self.time_period = pd.date_range(start, end)
 
-        cropping = self._load_csv('cropping')
-        cropping = cropping.reindex(self.time_period)
+        cropping = self._load_time_series_csv('cropping')
 
         meta = self.assess_meta_structure(start,end,cropping)
         meta['link_renames'] = link_renames
@@ -759,13 +761,13 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         i = DataframeInputs()
 
         # 'Slow_Flow'
-        slow_flow = self._load_csv('Results/Slow_Flow').reindex(self.time_period)
+        slow_flow = self._load_time_series_csv('Results/Slow_Flow')
         i.inputter(slow_flow, 'baseflow', HRU_TEMPLATE,model='EmcDwc')
         # i.inputter(slow_flow, 'baseflow', HRU_TEMPLATE,model='USLEFineSedimentGeneration')
         i.inputter(slow_flow, 'slowflow', HRU_TEMPLATE,model='SednetParticulateNutrientGeneration')
         # i.inputter(slow_flow, 'slowflow', HRU_TEMPLATE,model='SednetDissolvedNutrientGeneration')
 
-        quick_flow = self._load_csv('Results/Quick_Flow').reindex(self.time_period)
+        quick_flow = self._load_time_series_csv('Results/Quick_Flow')
         i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='EmcDwc')
         # i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='USLEFineSedimentGeneration')
         # i.inputter(quick_flow, 'quickflow', HRU_TEMPLATE,model='SednetDissolvedNutrientGeneration')
@@ -775,8 +777,8 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         i.inputter(quick_flow,'flow',HRU_TEMPLATE,model='PassLoadIfFlow')
         i.inputter(slow_flow,'flow',HRU_TEMPLATE,model='PassLoadIfFlow',constituent='NLeached')
 
-        ds_flow = self._load_csv('Results/downstream_flow_volume').reindex(self.time_period) * PER_DAY_TO_PER_SECOND
-        storage = self._load_csv('Results/storage_volume').reindex(self.time_period)
+        ds_flow = self._load_time_series_csv('Results/downstream_flow_volume') * PER_DAY_TO_PER_SECOND
+        storage = self._load_time_series_csv('Results/storage_volume')
 
         if len(link_renames):
             ds_flow = ds_flow.rename(columns=link_renames)
