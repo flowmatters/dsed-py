@@ -14,7 +14,7 @@ from openwater.examples import from_source
 from openwater import debugging
 from openwater.config import Parameteriser, ParameterTableAssignment, \
     DataframeInputs, DefaultParameteriser, NestedParameteriser, \
-    LoadArraysParameters
+    LoadArraysParameters, DictParameteriser
 import openwater.template as templating
 from openwater.template import OWTemplate, TAG_MODEL,TAG_PROCESS
 from openwater.timing import init_timer, report_time, close_timer
@@ -622,12 +622,26 @@ class SourceOpenwaterDynamicSednetMigrator(object):
     def _storage_parameteriser(self):
         p = NestedParameteriser()
 
-        # Load storage meta, identify outlets
         storage_tables = from_source.merge_storage_tables(self.data_path)
 
         storage_parameters = LoadArraysParameters(storage_tables,'${node_name}','nLVA',model='Storage')
-        p.append(storage_parameters)
+        p.nested.append(storage_parameters)
 
+        demands_at_storages = self._load_csv('Results/regulated_release_volume') * PER_DAY_TO_PER_SECOND
+
+        storage_demand_inputs = DataframeInputs()
+        storage_demand_inputs.inputter(demands_at_storages, 'demand', '${node_name}',model='Storage')
+        p.nested.append(storage_demand_inputs)
+
+        static_storage_parameters = self._load_csv('storage_params')
+        static_storage_parameters = static_storage_parameters.rename(columns={
+            'NetworkElement':'node_name',
+            'InitialStorage':'currentVolume'
+        })
+        p.nested.append(ParameterTableAssignment(static_storage_parameters,
+                                                 'Storage',
+                                                 dim_columns=['node_name'],
+                                                 complete=True))
         return p
 
     def build_ow_model(self,start=DEFAULT_START, end=DEFAULT_END,
