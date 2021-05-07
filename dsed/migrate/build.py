@@ -633,6 +633,14 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         storage_tables = from_source.merge_storage_tables(self.data_path)
 
+        # FIX LVAS
+        for k,tbl in storage_tables.items():
+            print('FIXING LVA FOR %s'%k)
+            tbl.rename(columns={
+                'areas':'volumes',
+                'volumes':'areas'
+            },inplace=True)
+
         storage_parameters = LoadArraysParameters(storage_tables,'${node_name}','nLVA',model='Storage')
         p.nested.append(storage_parameters)
 
