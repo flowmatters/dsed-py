@@ -58,7 +58,7 @@ class SourceImplementation(object):
         return pd.read_csv(os.path.join(self.directory, f.replace(' ', '')+'.csv'), index_col=0, parse_dates=True)
 
 
-class OpenwaterImplementation(object):
+class OpenwaterDynamicSednetResults(object):
     def __init__(self, fn):
         self.fn = fn
         self.ow_model_fn = fn + '.h5'
@@ -112,6 +112,68 @@ class OpenwaterImplementation(object):
         impacted_by_storage = network_df[network_df['id'].isin(ids)]
         links_downstream_storage = [l.replace('link for catchment ','') for l in impacted_by_storage[impacted_by_storage.feature_type=='link'].name]
         return links_downstream_storage
+
+    def generation_model(self,c,fu):
+        EMC = 'EmcDwc','totalLoad'
+        SUM = 'Sum','out'
+
+        if c in self.meta['sediments']:
+            if fu in (self.meta['usle_cgus']+self.meta['cropping_cgus']+self.meta['gully_cgus']):
+                return SUM
+            return EMC
+
+        if c in self.meta['pesticides']:
+            return SUM
+
+        if c in self.meta['dissolved_nutrients']:
+            if fu in ['Water']: #,'Conservation','Horticulture','Other','Urban','Forestry']:
+                return EMC
+
+            if (self.meta['ts_load'] is not None) and \
+               (fu in self.meta['ts_load']['cgus']) and \
+               (c in self.meta['ts_load']['constituents']):
+               return SUM
+
+            if fu == 'Sugarcane':
+                if c=='N_DIN':
+                    return SUM
+                elif c=='N_DON':
+                    return EMC
+                elif c.startswith('P'):
+                    return EMC
+            if (fu == 'Bananas') and (c=='N_DIN'):
+                return SUM
+
+            if fu in self.meta['cropping_cgus'] or fu in self.meta.get('pesticide_cgus',[]):
+                if c.startswith('P'):
+                    return 'PassLoadIfFlow', 'outputLoad'
+
+            return 'SednetDissolvedNutrientGeneration', 'totalLoad'
+
+        if c in self.meta['particulate_nutrients']:
+            if (fu != 'Sugarcane') and (c == 'P_Particulate'):
+                if (fu in self.meta['cropping_cgus']) or (fu in self.meta.get('timeseries_sediment',[])):
+                    return SUM
+
+            for fu_cat in ['cropping_cgus','hillslope_emc_cgus','gully_cgus','erosion_cgus']:
+                if fu in self.meta.get(fu_cat,[]):
+                    return 'SednetParticulateNutrientGeneration', 'totalLoad'
+
+        return EMC
+
+    def transport_model(self,c):
+        LCR = 'LumpedConstituentRouting','outflowLoad'
+        if c in self.meta['pesticides']:
+            return LCR
+        if c in self.meta['dissolved_nutrients']:
+            return 'InstreamDissolvedNutrientDecay', 'loadDownstream'
+        if c in self.meta['particulate_nutrients']:
+            return 'InstreamParticulateNutrient', 'loadDownstream'
+        if c == 'Sediment - Coarse':
+            return 'InstreamCoarseSediment', 'loadDownstream'
+        if c == 'Sediment - Fine':
+            return 'InstreamFineSediment', 'loadDownstream'
+        assert False
 
 class RegressionTest(object):
     def __init__(self, expected, actual):
