@@ -100,9 +100,10 @@ class OpenwaterDynamicSednetResults(object):
         outlets = [n['properties']['name'] for n in outlet_nodes]
         network.partition(outlets,'outlet')
         storages = network['features'].find_by_icon('/resources/StorageNodeModel')
+        extractions = network['features'].find_by_icon('/resources/ExtractionNodeModel')
 
         impacted_by_storage = []
-        for s in storages:
+        for s in storages._list+extractions._list:
             outlet = s['properties']['outlet']
             outlet_id = _feature_id(network['features'].find_by_name(outlet)[0])
             impacted_by_storage += network.path_between(s,outlet_id)
