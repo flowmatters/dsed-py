@@ -1,6 +1,10 @@
 '''
 Running Dynamic Sednet simulations using OpenWater
 '''
+import os
+import json
+import pandas as pd
+import geopandas as gpd
 from openwater import OWTemplate, OWLink
 from openwater.template import TAG_MODEL
 import openwater.nodes as n
@@ -9,6 +13,8 @@ from openwater.examples.from_source import get_default_node_template
 from openwater.catchments import \
     DOWNSTREAM_FLOW_FLUX, DOWNSTREAM_LOAD_FLUX, \
     UPSTREAM_FLOW_FLUX, UPSTREAM_LOAD_FLUX
+from openwater.results import OpenwaterResults
+from openwater.template import ModelFile
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 
@@ -610,24 +616,26 @@ def main_output_flux(model):
         return 'outputLoad'
     return 'totalLoad'
 
-
-
 class OpenwaterDynamicSednetResults(object):
-    def __init__(self, fn):
+    def __init__(self, fn, res_fn=None):
         self.fn = fn
-        self.ow_model_fn = fn + '.h5'
-        self.meta = json.load(open(fn+'.meta.json'))
+        self.ow_model_fn = self.filename_from_base('.h5')
+        self.meta = json.load(open(self.filename_from_base('.meta.json')))
         self.init_network(fn)
 
-        self.ow_results_fn = fn+'_outputs.h5'
+        self.ow_results_fn = res_fn or self.filename_from_base('_outputs.h5')
         self.dates = pd.date_range(self.meta['start'], self.meta['end'])
         self.open_files()
 
+    def filename_from_base(self,fn):
+        return self.fn.replace('.h5',fn)
+
     def init_network(self,fn):
-        self.nodes = gpd.read_file(fn+'.nodes.json')
-        self.links = gpd.read_file(fn+'.links.json')
-        self.catchments = gpd.read_file(fn+'.catchments.json')
-        raw = [json.load(open(fn+'.'+c+'.json','r')) for c in ['nodes','links','catchments']]
+        from veneer.general import _extend_network
+        self.nodes = gpd.read_file(self.filename_from_base('.nodes.json'))
+        self.links = gpd.read_file(self.filename_from_base('.links.json'))
+        self.catchments = gpd.read_file(self.filename_from_base('.catchments.json'))
+        raw = [json.load(open(self.filename_from_base('.'+c+'.json'),'r')) for c in ['nodes','links','catchments']]
         self.network = {
             'type':'FeatureCollection',
             'crs':raw[0]['crs'],
@@ -729,3 +737,12 @@ class OpenwaterDynamicSednetResults(object):
         if c == 'Sediment - Fine':
             return 'InstreamFineSediment', 'loadDownstream'
         assert False
+
+def _ensure_uncompressed(fn):
+    if os.path.exists(fn):
+        return
+    gzfn = fn + '.gz'
+    if not os.path.exists(gzfn):
+        raise Exception('File not found (compressed or uncompressed): %s'%fn)
+    os.system('gunzip %s'%gzfn)
+    assert os.path.exists(fn)
