@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 from dsed.ow import DynamicSednetCatchment, FINE_SEDIMENT, COARSE_SEDIMENT
-from .const import *
+from dsed.const import *
 
 import openwater.nodes as node_types
 from openwater.examples import from_source

@@ -5,6 +5,8 @@ import os
 import json
 import pandas as pd
 import geopandas as gpd
+import shutil
+import numpy as np
 from openwater import OWTemplate, OWLink
 from openwater.template import TAG_MODEL
 import openwater.nodes as n
@@ -15,6 +17,7 @@ from openwater.catchments import \
     UPSTREAM_FLOW_FLUX, UPSTREAM_LOAD_FLUX
 from openwater.results import OpenwaterResults
 from openwater.template import ModelFile
+from .const import *
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 
@@ -37,6 +40,8 @@ NIL_MODELS = {
 MODEL_NAME_TRANSLATIONS = {
 
 }
+
+
 # def default_generation_model(constituent,landuse):
 #     if constituent=='TSS':
 #         return n.USLEFineSedimentGeneration
@@ -737,6 +742,95 @@ class OpenwaterDynamicSednetResults(object):
         if c == 'Sediment - Fine':
             return 'InstreamFineSediment', 'loadDownstream'
         assert False
+
+class DynamicSednetStandardReporting(object):
+    def __init__(self,ow_impl):
+        self.impl = ow_impl
+        self.results = ow_impl.results
+        self.model = ow_impl.model
+
+    def outlet_nodes_time_series(self,dest,overwrite=False):
+        if os.path.exists(dest):
+            if overwrite and os.path.isdir(dest):
+                shutil.rmtree(dest)
+            else:
+                raise Exception("Destination exists")
+        os.makedirs(dest)
+
+        outlets = self.impl.network.outlet_nodes()
+        final_links = [l['properties']['name'].replace('link for catchment ','') \
+            for l in sum([self.impl.network.upstream_links(n['properties']['id'])._list for n in outlets],[])]
+        assert len(final_links)==len(outlets)
+
+        total_fn = os.path.join(dest,'TotalDaily_%s_ModelTotal_%s.csv')
+
+        flow_l = self.results.time_series('StorageRouting','outflow','catchment')[final_links]*PER_SECOND_TO_PER_DAY * M3_TO_L
+        for outlet,final_link in zip(outlets,final_links):
+            fn = os.path.join(dest,f'node_flow_{outlet["properties"]["name"]}_Litres.csv')
+            flow_l[final_link].to_csv(fn)
+        flow_l.sum(axis=1).to_csv(total_fn%('Flow','Litres'))
+        for c in self.impl.meta['constituents']:
+            mod, flux = self.impl.transport_model(c)
+            constituent_loads_kg = self.results.time_series(mod,flux,'catchment',constituent=c)[final_links]*PER_SECOND_TO_PER_DAY
+            for outlet,final_link in zip(outlets,final_links):
+                fn = os.path.join(dest,f'link_const_{outlet["properties"]["name"]}_{c}_Kilograms.csv')
+                constituent_loads_kg[final_link].to_csv(fn)
+            constituent_loads_kg.sum(axis=1).to_csv(total_fn%(c,'Kilograms'))
+
+    def outlet_nodes_rates_table(self):
+        outlets = [n['properties']['id'] for n in self.impl.network.outlet_nodes()]
+        final_links = [l['properties']['name'].replace('link for catchment ','') for l in sum([self.impl.network.upstream_links(n)._list for n in outlets],[])]
+        flow_l = np.array(self.results.time_series('StorageRouting','outflow','catchment')[final_links])*PER_SECOND_TO_PER_DAY * M3_TO_L
+        total_area = sum(self.model.parameters('DepthToRate',component='Runoff').area)
+        records = []
+        for c in self.impl.meta['constituents']:
+            mod, flux = self.impl.transport_model(c)
+            constituent_loads_kg = np.array(self.results.time_series(mod,flux,'catchment',constituent=c)[final_links])*PER_SECOND_TO_PER_DAY
+            records.append(dict(
+                Region='ModelTotal',
+                Constituent=c,
+                Area=total_area,
+                Total_Load_in_Kg=constituent_loads_kg.sum(),
+                Flow_Litres=flow_l.sum(),
+                Concentration=0.0,
+                LoadPerArea=0.0,
+                NumDays=flow_l.shape[0]
+            ))
+        return pd.DataFrame(records)
+
+    def climate_table(self):
+        orig_tbls = []
+        melted_tbls = []
+        variables = [('rainfall','Rainfall'),('actualET','Actual ET'),('baseflow','Baseflow'),('runoff','Runoff (Quickflow)')]
+        for v,lbl in variables:
+            tbl = self.results.table('Sacramento',v,'catchment','hru','sum','sum')*MM_TO_M
+            if v=='runoff':
+                tbl = tbl - orig_tbls[-1]
+            orig_tbls.append(tbl)
+            tbl = tbl.reset_index().melt(id_vars=['index'],value_vars=list(tbl.columns)).rename(columns={'index':'Catchment','variable':'FU','value':'Depth_m'})
+            tbl['Element']=lbl
+            melted_tbls.append(tbl)
+        return pd.concat(melted_tbls).sort_values(['Catchment','FU','Element'])
+
+    def fu_areas_table(self):
+        tbl = self.model.parameters('DepthToRate',component='Runoff')
+        tbl = tbl[['catchment','cgu','area']].sort_values(['catchment','cgu']).rename(columns={'catchment':'Catchment','cgu':'CGU'})
+        return tbl
+
+    def fu_summary_table(self):
+        summary = []
+        seen = {}
+        for con in self.impl.meta['constituents']:
+            for fu in self.impl.meta['fus']:
+                combo = self.impl.generation_model(con,fu)
+                if not combo in seen:
+                    model,flux = combo
+                    tbl = self.results.table(model,flux,'constituent','cgu','sum','sum') * PER_SECOND_TO_PER_DAY
+                    seen[combo]=tbl
+                tbl = seen[combo]
+                summary.append((con,fu,tbl.loc[con,fu]))
+        return pd.DataFrame(summary,columns=['Constituent','FU','Total_Load_in_Kg'])
+
 
 def _ensure_uncompressed(fn):
     if os.path.exists(fn):

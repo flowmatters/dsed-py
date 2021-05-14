@@ -2,7 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 from scipy import stats
-from .const import *
+from dsed.const import *
 
 R_SQD_THRESHOLD_NUT=0.99
 SSQUARES_THRESHOLD=1
