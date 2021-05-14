@@ -18,6 +18,7 @@ from openwater.catchments import \
 from openwater.results import OpenwaterResults
 from openwater.template import ModelFile
 from .const import *
+from openwater.file import _tabulate_model_scalars_from_file
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 
@@ -749,6 +750,18 @@ class DynamicSednetStandardReporting(object):
         self.results = ow_impl.results
         self.model = ow_impl.model
 
+    def _get_states(self,f,model,**tags):
+        mmap = self.model._map_model_dims(model)
+        return _tabulate_model_scalars_from_file(f,model,mmap,'states',**tags)
+
+    def get_final_states(self,model,**tags):
+        f = self.results.results
+        return self._get_states(f,model,**tags)
+
+    def get_initial_states(self,model,**tags):
+        f = self.results.model
+        return self._get_states(f,model,**tags)
+
     def outlet_nodes_time_series(self,dest,overwrite=False):
         if os.path.exists(dest):
             if overwrite and os.path.isdir(dest):
@@ -830,6 +843,71 @@ class DynamicSednetStandardReporting(object):
                 tbl = seen[combo]
                 summary.append((con,fu,tbl.loc[con,fu]))
         return pd.DataFrame(summary,columns=['Constituent','FU','Total_Load_in_Kg'])
+
+    def regional_summary_table(self):
+        tables = [self.mass_balance_summary_table(self,region) for region in self.impl.meta['regions']]
+        for tbl,region in zip(tables,self.impl.meta['regions']):
+            tbl['SummaryRegion']=region
+        return pd.concat(tables)
+
+    def overall_summary_table(self):
+        return self.mass_balance_summary_table()
+
+    def constituent_loss_table(self,region=None):
+        loss_fluxes = [
+            ('InstreamFineSediment','loadToFloodplain','Sediment - Fine'),
+            ('InstreamDissolvedNutrientDecay','loadToFloodplain'),
+            # ('InstreamDissolvedNutrientDecay','loadDecayed'), #TODO
+
+        ]
+
+        loss_states = [
+            ('InstreamFineSediment','channelStoreFine','Sediment - Fine')
+        ]
+        pass
+
+    def residual_constituent_table(self,region=None):
+        # Need to query final states (and initial states?)
+        mass_states = [
+            ('LumpedConstituentRouting','storedMass'),
+            ('InstreamFineSediment','totalStoredMass', 'Sediment - Fine'),
+            ('InstreamDissolvedNutrientDecay','totalStoredMass'),
+            ('InstreamCoarseSediment','totalStoredMass', 'Sediment - Coarse')
+        ]
+        tables = []
+        for state in mass_states:
+            m = state[0]
+            v = state[1]
+            values = self.get_final_states(m)
+            if len(state)>2:
+                values['constituent']=state[2]
+            tbl = values[['constituent',v]].groupby('constituent').sum().reset_index().rename(columns={
+                'constituent':'Constituent',
+                v:'Total_Load_in_Kg'
+            })
+            tables.append(tbl)
+        return pd.concat(tables).groupby('Constituent').sum().reset_index()
+
+    def mass_balance_summary_table(self,region=None):
+        cols =['Constituent','Total_Load_in_Kg']
+        input_tables = {
+            'Supply':self.fu_summary_table(),
+            'Export':self.outlet_nodes_rates_table(),
+            'Loss':self.constituent_loss_table(region),
+            'Residual':self.residual_constituent_table(region)
+        }
+
+        result = []
+        for k,tbl in input_tables.items():
+            if tbl is None:
+                print(f'Missing table {k}')
+                continue
+            tbl = tbl[cols].groupby('Constituent').sum().reset_index()
+            tbl['MassBalanceElement'] = k
+            tbl = tbl[['Constituent','MassBalanceElement','Total_Load_in_Kg']]
+            result.append(tbl)
+
+        return pd.concat(result).sort_values(['Constituent','MassBalanceElement'])
 
 
 def _ensure_uncompressed(fn):
