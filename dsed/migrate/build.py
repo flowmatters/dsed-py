@@ -336,7 +336,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         return ParameterTableAssignment(sacramento_parameters, RR, dim_columns=['catchment', 'hru'])
 
     def _routing_parameteriser(self,link_renames):
-        routing_params = _rename_link_tag_columns(self._load_csv('routing_params'), link_renames)
+        routing_params = _rename_link_tag_columns(self._load_csv('fr-RiverSystem.Flow.StorageRouting'), link_renames)
         return ParameterTableAssignment(routing_params, ROUTING, dim_columns=['catchment']),routing_params
 
     def _constituent_generation_parameteriser(self,meta,cropping):
