@@ -632,6 +632,8 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         p = NestedParameteriser()
 
         storage_tables = from_source.merge_storage_tables(self.data_path)
+        if storage_tables is None:
+            return p
 
         # FIX LVAS
         for k,tbl in storage_tables.items():
