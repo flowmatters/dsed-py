@@ -528,9 +528,11 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         res = NestedParameteriser()
 
         if not self.replay_hydro:
-            lag_parameters = ParameterTableAssignment(lag_non_routing_links(routing_params), node_types.Lag,
-                                                    dim_columns=['catchment'], complete=False)
-            res.nested.append(lag_parameters)
+            relevant_lag_params = lag_non_routing_links(routing_params)
+            if len(relevant_lag_params):
+                lag_parameters = ParameterTableAssignment(relevant_lag_params, node_types.Lag,
+                                                        dim_columns=['catchment'], complete=False)
+                res.nested.append(lag_parameters)
 
         instream_fine_sediment_params = _rename_link_tag_columns(
             self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_Fine_Sediment_Model'), link_renames, 'Link')
