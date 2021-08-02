@@ -628,7 +628,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         demands = demands
         i = DataframeInputs()
-        i.inputter(demands, 'demand', '${node}', model='PartitionDemand')
+        i.inputter(demands, 'demand', '${node_name}', model='PartitionDemand')
 
         return i
 
@@ -765,8 +765,8 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         p._parameterisers.append(self._constituent_transport_parameteriser(link_renames,routing_params))
 
         p._parameterisers.append(self._storage_parameteriser())
-        # report_time('Build demand parameteriser')
-        # p._parameterisers.append(self._demand_parameteriser())
+        report_time('Build demand parameteriser')
+        p._parameterisers.append(self._demand_parameteriser())
 
         if self.replay_hydro:
             report_time('Build hydro time series parameteriser')
