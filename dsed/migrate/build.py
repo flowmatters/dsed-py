@@ -674,6 +674,17 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         storage_climate_inputs.inputter(storage_climate,'pet','${node_name} Evaporation',model='Storage')
         p.nested.append(storage_climate_inputs)
 
+        storage_fsl_inputs = DataframeInputs()
+        storage_target_cap = pd.DataFrame()
+
+        for k,tbl in storage_tables.items():
+            cap = tbl['volumes'].max() - fsvs[k]# m3
+            storage_target_cap[k] = np.ones((len(storage_climate,)))*cap
+        assert len(storage_target_cap)==len(storage_climate)
+        storage_fsl_inputs.inputter(storage_target_cap,'targetMinimumCapacity','${node_name}',model='Storage')
+
+        p.nested.append(storage_fsl_inputs)
+
         return p
 
     def build_ow_model(self,start=DEFAULT_START, end=DEFAULT_END,
