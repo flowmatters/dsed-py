@@ -19,6 +19,8 @@ import openwater.template as templating
 from openwater.template import OWTemplate, TAG_MODEL,TAG_PROCESS
 from openwater.timing import init_timer, report_time, close_timer
 from veneer.general import _extend_network
+from logging import getLogger
+logger = getLogger(__name__)
 
 DEFAULT_START='1986/07/01'
 DEFAULT_END='2014/06/30'
@@ -87,7 +89,7 @@ def _rename_storage_variable(col):
 def build_ow_model(data_path, start=DEFAULT_START, end=DEFAULT_END,
                    link_renames=None,
                    replay_hydro=False,
-                   progress=print):
+                   progress=logger.info):
     builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro)
     return builder.build_ow_model(start,end,link_renames,progress)
 
@@ -260,7 +262,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         meta['pesticide_cgus'] = list(pesticide_cgus)
 
         meta['timeseries_sediment'] = list(set([c.split('$')[-1] for c in cropping.columns if 'Sediment - Fine$Soil_Load_T_per_Ha' in c]))
-        print('pesticide_cgus',pesticide_cgus)
+        logger.debug(f'pesticide_cgus: {pesticide_cgus}')
         cg_models = self._load_csv('cgmodels')
         cg_models = simplify(cg_models, 'model', ['Constituent', 'Functional Unit', 'Catchment'])
 
