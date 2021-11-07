@@ -80,12 +80,6 @@ def _rename_link_tag_columns(dataframe, link_renames, link_col='NetworkElement')
 
     return dataframe
 
-def _rename_storage_variable(col):
-    SUFFIXES=['InMetresPerSecond']
-    for sfx in SUFFIXES:
-        col = col.replace(sfx,'')
-    return col
-
 def build_ow_model(data_path, start=DEFAULT_START, end=DEFAULT_END,
                    link_renames=None,
                    replay_hydro=False,
@@ -667,7 +661,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
                                                  complete=True))
 
         storage_climate = self._load_time_series_csv('storage_climate')
-        storage_climate = storage_climate.rename(columns=_rename_storage_variable)
+        storage_climate = storage_climate.rename(columns=from_source._rename_storage_variable)
 
         storage_climate_inputs = DataframeInputs()
         storage_climate_inputs.inputter(storage_climate,'rainfall','${node_name} Rainfall',model='Storage')
