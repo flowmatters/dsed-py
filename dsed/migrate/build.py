@@ -629,17 +629,32 @@ class SourceOpenwaterDynamicSednetMigrator(object):
     def _storage_parameteriser(self):
         p = NestedParameteriser()
 
-        storage_tables = from_source.merge_storage_tables(self.data_path)
+        static_storage_parameters = self._load_csv('storage_params')
+        if (static_storage_parameters is None) or not len(static_storage_parameters):
+            return p
+
+        static_storage_parameters = static_storage_parameters.rename(columns={
+            'NetworkElement':'node_name',
+            'InitialStorage':'currentVolume'
+        })
+        p.nested.append(ParameterTableAssignment(static_storage_parameters,
+                                                 'Storage',
+                                                 dim_columns=['node_name'],
+                                                 complete=True))
+        fsvs = dict(zip(static_storage_parameters['node_name'],static_storage_parameters['FullSupplyVolume']))
+        fsls = dict(zip(static_storage_parameters['node_name'],static_storage_parameters['FullSupplyLevel']))
+
+        storage_tables = from_source.merge_storage_tables(self.data_path,fix_lva=True,fsls=fsls,fsvs=fsvs,extend_tables=True)
         if storage_tables is None:
             return p
 
         # FIX LVAS
-        for k,tbl in storage_tables.items():
-            print('FIXING LVA FOR %s'%k)
-            tbl.rename(columns={
-                'areas':'volumes',
-                'volumes':'areas'
-            },inplace=True)
+        # for k,tbl in storage_tables.items():
+        #     print('FIXING LVA FOR %s'%k)
+        #     tbl.rename(columns={
+        #         'areas':'volumes',
+        #         'volumes':'areas'
+        #     },inplace=True)
 
         storage_parameters = LoadArraysParameters(storage_tables,'${node_name}','nLVA',model='Storage')
         p.nested.append(storage_parameters)
@@ -649,16 +664,6 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         storage_demand_inputs = DataframeInputs()
         storage_demand_inputs.inputter(demands_at_storages, 'demand', '${node_name}',model='Storage')
         p.nested.append(storage_demand_inputs)
-
-        static_storage_parameters = self._load_csv('storage_params')
-        static_storage_parameters = static_storage_parameters.rename(columns={
-            'NetworkElement':'node_name',
-            'InitialStorage':'currentVolume'
-        })
-        p.nested.append(ParameterTableAssignment(static_storage_parameters,
-                                                 'Storage',
-                                                 dim_columns=['node_name'],
-                                                 complete=True))
 
         storage_climate = self._load_time_series_csv('storage_climate')
         storage_climate = storage_climate.rename(columns=from_source._rename_storage_variable)
