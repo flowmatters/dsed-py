@@ -40,23 +40,3 @@ def migration_test(path, link_renames={}):
     frac_bad = n_bad / len(r_squareds)
     assert_that(frac_bad).is_less_than_or_equal_to(0.05)
 
-class SourceImplementation(object):
-    def __init__(self, directory):
-        self.directory = directory
-
-    def _load_csv(self, f):
-        return pd.read_csv(os.path.join(self.directory, f.replace(' ', '')+'.csv'), index_col=0, parse_dates=True)
-
-
-class RegressionTest(object):
-    def __init__(self, expected, actual):
-        self.expected = expected
-        self.actual = actual
-        self.results = {}
-        self.comparison = migrate.SourceOWComparison(actual.meta,
-                                                     actual.results,
-                                                     expected.directory,
-                                                     actual.catchments)
-
-    def run(self):
-        pass

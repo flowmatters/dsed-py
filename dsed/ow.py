@@ -663,6 +663,7 @@ class OpenwaterDynamicSednetResults(object):
         self.model = ModelFile(self.ow_model_fn)
 
     def regulated_links(self):
+        from veneer.extensions import _feature_id
         network = self.network
         outlet_nodes = network.outlet_nodes()
         outlets = [n['properties']['name'] for n in outlet_nodes]
