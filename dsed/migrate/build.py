@@ -31,6 +31,14 @@ DS_EMC_GULLY_MODEL='Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model'
 DS_CROP_SED_MODEL='GBR_DynSed_Extension.Models.GBR_CropSed_Wrap_Model'
 EMC_DWC_MODELS=[SOURCE_EMC_MODEL,DS_EMC_GULLY_MODEL]
 GULLY_MODELS=[DS_EMC_GULLY_MODEL,DS_SEDIMENT_MODEL,DS_CROP_SED_MODEL]
+DS_AREAL_MODELS = [
+    ('DepthToRate','area'),
+    ('PassLoadIfFlow','scalingFactor'),
+    ('USLEFineSedimentGeneration','area'),
+    ('DynamicSednetGully','Area'),
+    ('DynamicSednetGullyAlt','Area'),
+    ('SednetParticulateNutrientGeneration','area')
+]
 
 def levels_required(table ,column ,criteria):
     if len(set(table[column]) )==1:
@@ -87,16 +95,17 @@ def build_ow_model(data_path, start=DEFAULT_START, end=DEFAULT_END,
     builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro)
     return builder.build_ow_model(start,end,link_renames,progress)
 
-class SourceOpenwaterDynamicSednetMigrator(object):
+class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurationProvider):
     def __init__(self,data_path,replay_hydro=False):
+        super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None)
         self.data_path = data_path
         self.replay_hydro = replay_hydro
         global RR,ROUTING
         RR = node_types.Sacramento
         ROUTING = node_types.StorageRouting
 
-    def _load_json(self,f):
-        return json.load(open(os.path.join(self.data_path, f + '.json')))
+    # def _load_json(self,f):
+    #     return json.load(open(os.path.join(self.data_path, f + '.json')))
 
     def _load_csv(self,f):
         fn = os.path.join(self.data_path, f + '.csv')
@@ -107,9 +116,9 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         return pd.read_csv(fn, index_col=0, parse_dates=True)
 
-    def _load_time_series_csv(self,f):
-        df = self._load_csv(f)
-        return df.reindex(self.time_period)
+    # def _load_time_series_csv(self,f):
+    #     df = self._load_csv(f)
+    #     return df.reindex(self.time_period)
 
     def _load_param_csv(self,f):
         df = self._load_csv(f)
@@ -308,22 +317,6 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         for v in ['rainfall','pet']:
             i.inputter(climate_ts,'input','%s for ${catchment}'%v,node_types.Input,variable=v)
         return i
-
-    def _fu_areas_parameteriser(self):
-        res = NestedParameteriser()
-        fu_areas = self._load_csv('fu_areas')
-        area_models = [
-            ('DepthToRate','area'),
-            ('PassLoadIfFlow','scalingFactor'),
-            (node_types.USLEFineSedimentGeneration,'area'),
-            (node_types.DynamicSednetGully,'Area'),
-            (node_types.DynamicSednetGullyAlt,'Area'),
-            (node_types.SednetParticulateNutrientGeneration,'area')
-        ]
-        for model,prop in area_models:
-            res.nested.append(ParameterTableAssignment(fu_areas,model,prop,'cgu','catchment'))
-
-        return res
 
     def _runoff_parameteriser(self):
         sacramento_parameters = self._load_csv('runoff_params')
@@ -595,97 +588,6 @@ class SourceOpenwaterDynamicSednetMigrator(object):
 
         return res
 
-    def _demand_parameteriser(self):
-        nodes = self.network['features'].find_by_feature_type('node')
-        water_users = nodes.find_by_icon('/resources/WaterUserNodeModel')
-        demands = pd.DataFrame()
-        for wu in water_users:
-            wu_name = wu['properties']['name']
-            us_links = self.network.upstream_links(wu['properties']['id'])
-            assert len(us_links)==1
-            extraction_node_id = us_links[0]['properties']['from_node']
-            extraction_node = nodes.find_by_id(extraction_node_id)[0]
-            extraction_node_name = extraction_node['properties']['name']
-            demand = self._load_csv(f'timeseries-demand-{wu_name}')
-
-            if demand is None:
-                demand = np.array(self._load_csv(f'monthly-pattern-demand-{wu_name}').volume)
-                month_ts = self.time_period.month-1
-                demand = demand[month_ts]
-                demand = pd.DataFrame({'TSO':demand},index=self.time_period)
-            else:
-                demand = demand.reindex(self.time_period)
-
-            print(wu_name,extraction_node_name)
-            print(demand.columns)
-            demands[extraction_node_name] = demand['TSO']
-
-        demands = demands
-        i = DataframeInputs()
-        i.inputter(demands, 'demand', '${node_name}', model='PartitionDemand')
-
-        return i
-
-    def _storage_parameteriser(self):
-        p = NestedParameteriser()
-
-        static_storage_parameters = self._load_csv('storage_params')
-        if (static_storage_parameters is None) or not len(static_storage_parameters):
-            return p
-
-        static_storage_parameters = static_storage_parameters.rename(columns={
-            'NetworkElement':'node_name',
-            'InitialStorage':'currentVolume'
-        })
-        p.nested.append(ParameterTableAssignment(static_storage_parameters,
-                                                 'Storage',
-                                                 dim_columns=['node_name'],
-                                                 complete=True))
-        fsvs = dict(zip(static_storage_parameters['node_name'],static_storage_parameters['FullSupplyVolume']))
-        fsls = dict(zip(static_storage_parameters['node_name'],static_storage_parameters['FullSupplyLevel']))
-
-        storage_tables = from_source.merge_storage_tables(self.data_path,fix_lva=True,fsls=fsls,fsvs=fsvs,extend_tables=True)
-        if storage_tables is None:
-            return p
-
-        # FIX LVAS
-        # for k,tbl in storage_tables.items():
-        #     print('FIXING LVA FOR %s'%k)
-        #     tbl.rename(columns={
-        #         'areas':'volumes',
-        #         'volumes':'areas'
-        #     },inplace=True)
-
-        storage_parameters = LoadArraysParameters(storage_tables,'${node_name}','nLVA',model='Storage')
-        p.nested.append(storage_parameters)
-
-        demands_at_storages = self._load_csv('Results/regulated_release_volume') * PER_DAY_TO_PER_SECOND
-
-        storage_demand_inputs = DataframeInputs()
-        storage_demand_inputs.inputter(demands_at_storages, 'demand', '${node_name}',model='Storage')
-        p.nested.append(storage_demand_inputs)
-
-        storage_climate = self._load_time_series_csv('storage_climate')
-        storage_climate = storage_climate.rename(columns=from_source._rename_storage_variable)
-
-        storage_climate_inputs = DataframeInputs()
-        storage_climate_inputs.inputter(storage_climate,'rainfall','${node_name} Rainfall',model='Storage')
-        storage_climate_inputs.inputter(storage_climate,'pet','${node_name} Evaporation',model='Storage')
-        p.nested.append(storage_climate_inputs)
-
-        storage_fsl_inputs = DataframeInputs()
-        storage_target_cap = pd.DataFrame()
-
-        for k,tbl in storage_tables.items():
-            cap = tbl['volumes'].max() - fsvs[k]# m3
-            storage_target_cap[k] = np.ones((len(storage_climate,)))*cap
-        assert len(storage_target_cap)==len(storage_climate)
-        storage_fsl_inputs.inputter(storage_target_cap,'targetMinimumCapacity','${node_name}',model='Storage')
-
-        p.nested.append(storage_fsl_inputs)
-
-        return p
-
     def build_ow_model(self,start=DEFAULT_START, end=DEFAULT_END,
                        link_renames=None,
                        progress=print):
@@ -751,7 +653,7 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         report_time('Build climate parameteriser')
         p._parameterisers.append(self._climate_parameteriser())
         report_time('Build fu area parameteriser')
-        p._parameterisers.append(self._fu_areas_parameteriser())
+        p._parameterisers.append(from_source.fu_areas_parameteriser(self._load_csv('fu_areas'),DS_AREAL_MODELS))
         report_time('Build runoff parameteriser')
         p._parameterisers.append(self._runoff_parameteriser())
         report_time('Build generation parameteriser')
@@ -763,9 +665,8 @@ class SourceOpenwaterDynamicSednetMigrator(object):
         report_time('Build transport parameteriser')
         p._parameterisers.append(self._constituent_transport_parameteriser(link_renames,routing_params))
 
-        p._parameterisers.append(self._storage_parameteriser())
-        report_time('Build demand parameteriser')
-        p._parameterisers.append(self._demand_parameteriser())
+        p._parameterisers.append(from_source.node_model_parameteriser(self))
+        # report_time('Build demand parameteriser')
 
         if self.replay_hydro:
             report_time('Build hydro time series parameteriser')
