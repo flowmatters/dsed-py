@@ -40,6 +40,10 @@ DS_AREAL_MODELS = [
     ('SednetParticulateNutrientGeneration','area')
 ]
 
+CLIMATE_INPUTS = {
+    'rainfall':['USLEFineSedimentGeneration']
+}
+
 def levels_required(table ,column ,criteria):
     if len(set(table[column]) )==1:
         return 0
@@ -315,7 +319,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         climate_ts = self._load_time_series_csv('climate')
         i = DataframeInputs()
         for v in ['rainfall','pet']:
-            i.inputter(climate_ts,'input','%s for ${catchment}'%v,node_types.Input,variable=v)
+            i.inputter(climate_ts,'input','%s for ${catchment}'%v,'Input',variable=v)
+            for model_type in CLIMATE_INPUTS.get(v,[]):
+                i.inputter(climate_ts,v,'%s for ${catchment}'%v,model_type)
         return i
 
     def _runoff_parameteriser(self):
