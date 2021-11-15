@@ -634,7 +634,7 @@ class OpenwaterDynamicSednetResults(object):
         self.open_files()
 
     def filename_from_base(self,fn):
-        return self.fn.replace('.h5',fn)
+        return self.fn.replace('.h5','')+fn
 
     def init_network(self,fn):
         from veneer.general import _extend_network
