@@ -92,12 +92,12 @@ def build_ow_model(data_path, start=DEFAULT_START, end=DEFAULT_END,
                    link_renames=None,
                    replay_hydro=False,
                    progress=logger.info):
-    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro)
-    return builder.build_ow_model(start,end,link_renames,progress)
+    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end)
+    return builder.build_ow_model(link_renames,progress)
 
 class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurationProvider):
-    def __init__(self,data_path,replay_hydro=False):
-        super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None)
+    def __init__(self,data_path,replay_hydro=False,start=DEFAULT_START,end=DEFAULT_END):
+        super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None,time_period=pd.date_range(start,end))
         self.data_path = data_path
         self.replay_hydro = replay_hydro
         global RR,ROUTING
@@ -233,10 +233,10 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         return catchment_template
 
-    def assess_meta_structure(self,start,end,cropping):
+    def assess_meta_structure(self,cropping):
         meta = {}
-        meta['start'] = start
-        meta['end'] = end
+        meta['start'] = self.time_period[0]
+        meta['end'] = self.time_period[-1]
 
         fus = self._load_json('fus')
         meta['fus'] = fus
@@ -307,9 +307,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         return meta
 
     def _date_parameteriser(self,meta):
-        date_components = [int(c) for c in meta['start'].split('/')]
-        return DefaultParameteriser(node_types.DateGenerator, startYear=date_components[0],
-                                    startMonth=date_components[1], startDate=date_components[2])
+        start = meta['start']
+        return DefaultParameteriser(node_types.DateGenerator, startYear=start.year,
+                                    startMonth=start.month, startDate=start.day)
 
     def _climate_parameteriser(self):
         climate_ts = self._load_time_series_csv('climate')
@@ -588,7 +588,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         return res
 
-    def build_ow_model(self,start=DEFAULT_START, end=DEFAULT_END,
+    def build_ow_model(self,
                        link_renames=None,
                        progress=print):
         init_timer('Build')
@@ -598,11 +598,11 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         if link_renames is None:
             link_renames = map_link_name_mismatches(self.network)
-        self.time_period = pd.date_range(start, end)
+        # self.time_period = pd.date_range(start, end)
 
         cropping = self._load_time_series_csv('cropping')
 
-        meta = self.assess_meta_structure(start,end,cropping)
+        meta = self.assess_meta_structure(cropping)
         meta['link_renames'] = link_renames
         print(meta)
         # return meta
@@ -677,6 +677,8 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         
         close_timer()
         close_timer()
+        meta['warnings'] = self.warnings
+
         return model, meta, network
 
     def hydro_timeseries_inputter(self,link_renames):
