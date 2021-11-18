@@ -32,20 +32,29 @@ class DynamicSednetExtractor(SourceExtractor):
         self.write_csv('climate',climate)
 
     def _extract_generation_configuration(self):
-        self.progress('Getting usle timeseries')
-        usle_ts = self.v.data_source('USLE Data')
-        usle_timeseries = usle_ts['Items'][0]['Details']
+        try:
+            self.progress('Getting usle timeseries')
+            usle_ts = self.v.data_source('USLE Data')
+            usle_timeseries = usle_ts['Items'][0]['Details']
+            self.write_csv('usle_timeseries',usle_timeseries)
+        except:
+            self.progress('No USLE timeseries')
 
-        self.progress('Getting gully timeseries')
-        gully_ts = self.v.data_source('Gully Data')
-        gully_timeseries = gully_ts['Items'][0]['Details']
+        try:
+            self.progress('Getting gully timeseries')
+            gully_ts = self.v.data_source('Gully Data')
+            gully_timeseries = gully_ts['Items'][0]['Details']
+            self.write_csv('gully_timeseries',gully_timeseries)
+        except:
+            self.progress('No gully timeseries')
 
-        self.progress('Getting cropping metadata')
-        cropping_ts = get_big_data_source(self.v,'Cropping Data',self.data_sources,self.progress)
-
-        self.write_csv('usle_timeseries',usle_timeseries)
-        self.write_csv('gully_timeseries',gully_timeseries)
-        self.write_csv('cropping',cropping_ts)
+        try:
+            self.progress('Getting cropping metadata')
+            cropping_ts = get_big_data_source(self.v,'Cropping Data',self.data_sources,self.progress)
+            self.write_csv('cropping',cropping_ts)
+        except:
+            self.progress('No cropping metadata')
 
         super()._extract_generation_configuration()
+
 
