@@ -258,8 +258,10 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         particulate_nutrients = [c for c in constituents if '_Particulate' in c]
         meta['particulate_nutrients'] = particulate_nutrients
 
-        part_nutrient_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Particulate')
-        meta['particulate_nutrient_cgus'] = list(set(part_nutrient_params.cgu))
+        meta['particulate_nutrient_cgus'] = []
+        if(len(meta['particulate_nutrients']) > 0):
+            part_nutrient_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Particulate')
+            meta['particulate_nutrient_cgus'] = list(set(part_nutrient_params.cgu))
 
         sediments = [c for c in constituents if c.startswith('Sediment - ')]
         meta['sediments'] = sediments
@@ -303,6 +305,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         meta['usle_cgus'] = cgus_using_model(FINE_SEDIMENT,DS_SEDIMENT_MODEL)
         meta['gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,GULLY_MODELS)
         meta['hillslope_emc_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,EMC_DWC_MODELS)
+        meta['emc_plus_gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,DS_EMC_GULLY_MODEL)
         meta['ts_load'] = {
             'cgus': list(set(cg_models[cg_models.model=='Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model']['Functional Unit'])),
             'constituents':list(set(cg_models[cg_models.model=='Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model']['Constituent'])),
@@ -349,88 +352,114 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         # TODO NEED TO SCALE BY AREA!
         res.nested.append(cropping_inputs)
 
-        usle_timeseries = self._load_time_series_csv('usle_timeseries')
-        usle_timeseries = usle_timeseries.fillna(method='ffill')
         fine_sediment_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Sediment_Generation')
-        assert set(fine_sediment_params.useAvModel) == {False}
-        assert len(set(fine_sediment_params.constituent)) == 1
-        fine_sediment_params = fine_sediment_params.rename(columns={
-            'Max_Conc': 'maxConc',
-            'USLE_HSDR_Fine': 'usleHSDRFine',
-            'USLE_HSDR_Coarse': 'usleHSDRCoarse'
-        })
+        if fine_sediment_params is not None:
+            usle_timeseries = self._load_time_series_csv('usle_timeseries')
+            usle_timeseries = usle_timeseries.fillna(method='ffill')
+            assert set(fine_sediment_params.useAvModel) == {False}
+            assert len(set(fine_sediment_params.constituent)) == 1
+            fine_sediment_params = fine_sediment_params.rename(columns={
+                'Max_Conc': 'maxConc',
+                'USLE_HSDR_Fine': 'usleHSDRFine',
+                'USLE_HSDR_Coarse': 'usleHSDRCoarse'
+            })
 
-        fine_sediment_params = fine_sediment_params.rename(
-            columns={c: c.replace('_', '') for c in fine_sediment_params.columns})
-        usle_parameters = ParameterTableAssignment(fine_sediment_params, node_types.USLEFineSedimentGeneration,
-                                                   dim_columns=['catchment', 'cgu'])
-        res.nested.append(usle_parameters)
+            fine_sediment_params = fine_sediment_params.rename(
+                columns={c: c.replace('_', '') for c in fine_sediment_params.columns})
+            usle_parameters = ParameterTableAssignment(fine_sediment_params, node_types.USLEFineSedimentGeneration,
+                                                    dim_columns=['catchment', 'cgu'])
+            res.nested.append(usle_parameters)
 
-        usle_timeseries_inputs = DataframeInputs()
-        usle_timeseries_inputs.inputter(usle_timeseries, 'KLSC', 'KLSC_Total For ${catchment} ${cgu}')
-        usle_timeseries_inputs.inputter(usle_timeseries, 'KLSC_Fine', 'KLSC_Fines For ${catchment} ${cgu}')
-        usle_timeseries_inputs.inputter(usle_timeseries, 'CovOrCFact', 'C-Factor For ${catchment} ${cgu}')
-        res.nested.append(usle_timeseries_inputs)
+            usle_timeseries_inputs = DataframeInputs()
+            usle_timeseries_inputs.inputter(usle_timeseries, 'KLSC', 'KLSC_Total For ${catchment} ${cgu}')
+            usle_timeseries_inputs.inputter(usle_timeseries, 'KLSC_Fine', 'KLSC_Fines For ${catchment} ${cgu}')
+            usle_timeseries_inputs.inputter(usle_timeseries, 'CovOrCFact', 'C-Factor For ${catchment} ${cgu}')
+            res.nested.append(usle_timeseries_inputs)
 
         gbr_crop_sed_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_CropSed_Wrap_Model')
-        gbr_crop_sed_params = gbr_crop_sed_params.rename(
-            columns={c: c.replace('_', '') for c in gbr_crop_sed_params.columns})
+        if gbr_crop_sed_params is not None:
+            gbr_crop_sed_params = gbr_crop_sed_params.rename(
+                columns={c: c.replace('_', '') for c in gbr_crop_sed_params.columns})
+
+            if fine_sediment_params is not None:
+                fine_sediment_params = pd.concat([fine_sediment_params, gbr_crop_sed_params], sort=False)
+            else:
+                fine_sediment_params = gbr_crop_sed_params
+
+        #This is checking for our EMC _ Gully model that also has gully inputs
+        #if(len(meta['emc_plus_gully_cgus']) > 0):
 
         gbr_emc_gully_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model')
-        gbr_emc_gully_params['Gully_Management_Practice_Factor'] = 0.0 # HACK work around bug in C#
-        for sed in ['Fine','Coarse']:
-            emc_dwc_params = gbr_emc_gully_params.rename(columns={
-                sed.lower()+'EMC':'EMC',
-                sed.lower()+'DWC':'DWC'
-            }).copy()
-            emc_dwc_params['constituent'] = 'Sediment - '+sed
-            apply_dataframe(emc_dwc_params,node_types.EmcDwc,complete=False)
+        if gbr_emc_gully_params is not None:
+            gbr_emc_gully_params['Gully_Management_Practice_Factor'] = 0.0 # HACK work around bug in C#
+            for sed in ['Fine','Coarse']:
+                emc_dwc_params = gbr_emc_gully_params.rename(columns={
+                    sed.lower()+'EMC':'EMC',
+                    sed.lower()+'DWC':'DWC'
+                }).copy()
+                emc_dwc_params['constituent'] = 'Sediment - '+sed
+                apply_dataframe(emc_dwc_params,node_types.EmcDwc,complete=False)
 
-        gbr_emc_gully_params = gbr_emc_gully_params.rename(
-            columns={c: c.replace('_', '') for c in gbr_emc_gully_params.columns})
+            gbr_emc_gully_params = gbr_emc_gully_params.rename(
+                columns={c: c.replace('_', '') for c in gbr_emc_gully_params.columns})
 
-        fine_sediment_params = pd.concat([fine_sediment_params, gbr_crop_sed_params,gbr_emc_gully_params], sort=False)
+            if fine_sediment_params is not None:
+                fine_sediment_params = pd.concat([fine_sediment_params, gbr_crop_sed_params,gbr_emc_gully_params], sort=False)
+            else:
+                fine_sediment_params = gbr_emc_gully_params
 
-        fine_sediment_params = fine_sediment_params.rename(columns={
-            'GullyYearDisturb': 'YearDisturbance',
-            'AverageGullyActivityFactor': 'averageGullyActivityFactor',
-            'GullyManagementPracticeFactor': 'managementPracticeFactor',
-            'GullySDRFine': 'sdrFine',
-            'GullySDRCoarse': 'sdrCoarse'
-        })
-        # Area, AnnualRunoff, GullyAnnualAverageSedimentSupply, annualLoad, longtermRunoffFactor
-        # dailyRunoffPowerFactor
-        gully_params = fine_sediment_params.fillna({
-            'sdrFine': 100.0,
-            'sdrCoarse': 100.0,
-            'managementPracticeFactor': 1.0
-        }).fillna(0.0)
-        gully_parameters = ParameterTableAssignment(gully_params, node_types.DynamicSednetGullyAlt,
-                                                    dim_columns=['catchment', 'cgu'])
-        res.nested.append(gully_parameters)
-        gully_parameters = ParameterTableAssignment(gully_params, node_types.DynamicSednetGully,
-                                                    dim_columns=['catchment', 'cgu'])
-        res.nested.append(gully_parameters)
+            fine_sediment_params = fine_sediment_params.rename(columns={
+                'GullyYearDisturb': 'YearDisturbance',
+                'AverageGullyActivityFactor': 'averageGullyActivityFactor',
+                'GullyManagementPracticeFactor': 'managementPracticeFactor',
+                'GullySDRFine': 'sdrFine',
+                'GullySDRCoarse': 'sdrCoarse'
+            })
 
-        gully_timeseries = self._load_csv('gully_timeseries').reindex(self.time_period, method='ffill')
-        gully_inputs = DataframeInputs()
-        gully_ts_columns = ['Annual Load', 'Annual Runoff']
-        gully_ts_destinations = ['annualLoad', 'AnnualRunoff']
-        for col, input_name in zip(gully_ts_columns, gully_ts_destinations):
-            gully_inputs.inputter(gully_timeseries, input_name, '%s For ${catchment} ${cgu}' % col)
-
-        res.nested.append(gully_inputs)
-
-        ts_load_hillslope_fine = gully_params.pivot('catchment', 'cgu', 'HillSlopeFinePerc') / 100.0
-        hillslope_fine = ParameterTableAssignment(ts_load_hillslope_fine, node_types.FixedPartition,
+            # Area, AnnualRunoff, GullyAnnualAverageSedimentSupply, annualLoad, longtermRunoffFactor
+            # dailyRunoffPowerFactor
+            gully_params = fine_sediment_params.fillna({
+                'sdrFine': 100.0,
+                'sdrCoarse': 100.0,
+                'managementPracticeFactor': 1.0
+            }).fillna(0.0)
+            gully_parameters = ParameterTableAssignment(gully_params, node_types.DynamicSednetGullyAlt,
+                                                        dim_columns=['catchment', 'cgu'])
+            res.nested.append(gully_parameters)
+            gully_parameters = ParameterTableAssignment(gully_params, node_types.DynamicSednetGully,
+                                                        dim_columns=['catchment', 'cgu'])
+            res.nested.append(gully_parameters)
+            ts_load_hillslope_fine = gully_params.pivot('catchment', 'cgu', 'HillSlopeFinePerc') / 100.0
+            hillslope_fine = ParameterTableAssignment(ts_load_hillslope_fine, node_types.FixedPartition,
                                                   parameter='fraction', column_dim='cgu', row_dim='catchment')
-        res.nested.append(hillslope_fine)
+            res.nested.append(hillslope_fine)
 
-        ts_sediment_delivery_ratios = compute_ts_sediment_delivery_ratios(gully_params)
-        apply_dataframe(ts_sediment_delivery_ratios,node_types.DeliveryRatio,complete=False)
+            ts_sediment_delivery_ratios = compute_ts_sediment_delivery_ratios(gully_params)
+            apply_dataframe(ts_sediment_delivery_ratios,node_types.DeliveryRatio,complete=False)
 
-        fine_ts_conversion_factor = ts_sediment_delivery_ratios[ts_sediment_delivery_ratios.constituent==FINE_SEDIMENT]
-        apply_dataframe(fine_ts_conversion_factor,node_types.ApplyScalingFactor,complete=False)
+            fine_ts_conversion_factor = ts_sediment_delivery_ratios[ts_sediment_delivery_ratios.constituent==FINE_SEDIMENT]
+            apply_dataframe(fine_ts_conversion_factor,node_types.ApplyScalingFactor,complete=False)
+
+        if(len(meta['gully_cgus']) > 0):
+            gully_timeseries = self._load_csv('gully_timeseries').reindex(self.time_period, method='ffill')
+            gully_inputs = DataframeInputs()
+            gully_ts_columns = ['Annual Load', 'Annual Runoff']
+            gully_ts_destinations = ['annualLoad', 'AnnualRunoff']
+            for col, input_name in zip(gully_ts_columns, gully_ts_destinations):
+                gully_inputs.inputter(gully_timeseries, input_name, '%s For ${catchment} ${cgu}' % col)
+
+            res.nested.append(gully_inputs)
+
+        # ts_load_hillslope_fine = gully_params.pivot('catchment', 'cgu', 'HillSlopeFinePerc') / 100.0
+        # hillslope_fine = ParameterTableAssignment(ts_load_hillslope_fine, node_types.FixedPartition,
+        #                                           parameter='fraction', column_dim='cgu', row_dim='catchment')
+        # res.nested.append(hillslope_fine)
+
+        # ts_sediment_delivery_ratios = compute_ts_sediment_delivery_ratios(gully_params)
+        # apply_dataframe(ts_sediment_delivery_ratios,node_types.DeliveryRatio,complete=False)
+
+        # fine_ts_conversion_factor = ts_sediment_delivery_ratios[ts_sediment_delivery_ratios.constituent==FINE_SEDIMENT]
+        # apply_dataframe(fine_ts_conversion_factor,node_types.ApplyScalingFactor,complete=False)
 
         emc_dwc = self._load_param_csv('cg-' + SOURCE_EMC_MODEL)
         if emc_dwc is not None:
@@ -440,29 +469,31 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             })
             apply_dataframe(emc_dwc,node_types.EmcDwc,complete=False)
 
-        gbr_crop_sed_params = gbr_crop_sed_params.rename(columns={
-            'Catchment': 'catchment',
-            'Functional Unit': 'cgu',
-        }) # TODO! Surely not necessary!
+        if gbr_crop_sed_params is not None:
+            gbr_crop_sed_params = gbr_crop_sed_params.rename(columns={
+                'Catchment': 'catchment',
+                'Functional Unit': 'cgu',
+            }) # TODO! Surely not necessary!
 
-        crop_sed_fine_dwcs = gbr_crop_sed_params[['catchment', 'cgu', 'HillslopeFineDWC', 'HillslopeFineSDR']].copy()
-        crop_sed_fine_dwcs['DWC'] = crop_sed_fine_dwcs['HillslopeFineDWC']  # * PERCENT_TO_FRACTION * crop_sed_fine_dwcs['HillslopeFineSDR']
-        crop_sed_fine_dwcs['constituent'] = FINE_SEDIMENT
-        apply_dataframe(crop_sed_fine_dwcs,node_types.EmcDwc,complete=False)
+            crop_sed_fine_dwcs = gbr_crop_sed_params[['catchment', 'cgu', 'HillslopeFineDWC', 'HillslopeFineSDR']].copy()
+            crop_sed_fine_dwcs['DWC'] = crop_sed_fine_dwcs['HillslopeFineDWC']  # * PERCENT_TO_FRACTION * crop_sed_fine_dwcs['HillslopeFineSDR']
+            crop_sed_fine_dwcs['constituent'] = FINE_SEDIMENT
+            apply_dataframe(crop_sed_fine_dwcs,node_types.EmcDwc,complete=False)
 
-        crop_sed_coarse_dwcs = gbr_crop_sed_params[['catchment', 'cgu', 'HillslopeCoarseDWC', 'HillslopeCoarseSDR']].copy()
-        crop_sed_coarse_dwcs['DWC'] = crop_sed_coarse_dwcs[
-            'HillslopeCoarseDWC']  # * PERCENT_TO_FRACTION * crop_sed_coarse_dwcs['HillslopeCoarseSDR']
-        crop_sed_coarse_dwcs['constituent'] = COARSE_SEDIMENT
-        apply_dataframe(crop_sed_coarse_dwcs,node_types.EmcDwc,complete=False)
+            crop_sed_coarse_dwcs = gbr_crop_sed_params[['catchment', 'cgu', 'HillslopeCoarseDWC', 'HillslopeCoarseSDR']].copy()
+            crop_sed_coarse_dwcs['DWC'] = crop_sed_coarse_dwcs[
+                'HillslopeCoarseDWC']  # * PERCENT_TO_FRACTION * crop_sed_coarse_dwcs['HillslopeCoarseSDR']
+            crop_sed_coarse_dwcs['constituent'] = COARSE_SEDIMENT
+            apply_dataframe(crop_sed_coarse_dwcs,node_types.EmcDwc,complete=False)
 
         dissolved_nutrient_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Dissolved')
-        apply_dataframe(dissolved_nutrient_params,node_types.SednetDissolvedNutrientGeneration,complete=False)
+        if dissolved_nutrient_params is not None:
+            apply_dataframe(dissolved_nutrient_params,node_types.SednetDissolvedNutrientGeneration,complete=False)
 
         part_nutrient_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Particulate')
         # meta['particulate_nutrient_cgus'] = set(part_nutrient_params.cgu)
-        
-        apply_dataframe(part_nutrient_params,node_types.SednetParticulateNutrientGeneration,complete=False)
+        if part_nutrient_params is not None:
+            apply_dataframe(part_nutrient_params,node_types.SednetParticulateNutrientGeneration,complete=False)
 
         sugarcane_din_params = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel')
         if sugarcane_din_params is not None:
@@ -503,7 +534,8 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         #   lag_parameters = ParameterTableAssignment(lag_outlet_links(network_veneer),node_types.Lag,dim_columns=['catchment'],complete=False)
 
         particulate_nut_gen = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Nutrient_Generation_Particulate')
-        apply_dataframe(particulate_nut_gen, node_types.SednetParticulateNutrientGeneration,complete=False)
+        if particulate_nut_gen is not None:
+            apply_dataframe(particulate_nut_gen, node_types.SednetParticulateNutrientGeneration,complete=False)
 
         ts_load_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model')
         if ts_load_params is not None:
@@ -529,68 +561,70 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                                                         dim_columns=['catchment'], complete=False)
                 res.nested.append(lag_parameters)
 
-        instream_fine_sediment_params = _rename_link_tag_columns(
-            self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_Fine_Sediment_Model'), link_renames, 'Link')
-        link_attributes = instream_fine_sediment_params[
-            ['catchment', 'LinkLength_M', 'LinkHeight_M', 'LinkWidth_M']].set_index('catchment')
-        link_attributes = link_attributes.rename(
-            columns={'LinkLength_M': 'linkLength', 'LinkHeight_M': 'linkHeight', 'LinkWidth_M': 'linkWidth'})
+        instream_fine_sediment_params = self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_Fine_Sediment_Model')
+        if instream_fine_sediment_params is not None:
+            instream_fine_sediment_params = _rename_link_tag_columns(instream_fine_sediment_params, link_renames, 'Link')
 
-        instream_nutrient_params = _rename_link_tag_columns(
-            self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_DissolvedNut_Model'), link_renames, 'Link')
-        instream_nutrient_params['uptakeVelocity'] = instream_nutrient_params['UptakeVelocity']
-        instream_nutrient_params = instream_nutrient_params.set_index('catchment')
-        instream_nutrient_params = instream_nutrient_params.join(link_attributes, how='inner').reset_index()
-        #   print(instream_nutrient_params)
-        instream_nutrient_parameteriser = ParameterTableAssignment(instream_nutrient_params,
-                                                                   'InstreamDissolvedNutrientDecay',
-                                                                   dim_columns=['catchment'],
-                                                                   complete=False)
-        res.nested.append(instream_nutrient_parameteriser)
+            link_attributes = instream_fine_sediment_params[
+                ['catchment', 'LinkLength_M', 'LinkHeight_M', 'LinkWidth_M']].set_index('catchment')
+            link_attributes = link_attributes.rename(
+                columns={'LinkLength_M': 'linkLength', 'LinkHeight_M': 'linkHeight', 'LinkWidth_M': 'linkWidth'})
 
-        instream_fine_sediment_params = instream_fine_sediment_params.rename(columns={
-            'BankFullFlow': 'bankFullFlow',
-            'BankHeight_M': 'bankHeight',
-            'FloodPlainArea_M2': 'floodPlainArea',
-            #   'LinkHeight_M':'bankHeight',
-            'LinkLength_M': 'linkLength',
-            'LinkWidth_M': 'linkWidth',
-            'Link_Slope': 'linkSlope',
-            'LongTermAvDailyFlow': 'longTermAvDailyFlow',
-            'ManningsN': 'manningsN',
-            'RiparianVegPercent': 'riparianVegPercent',
-            'SoilErodibility': 'soilErodibility',
-            'SoilPercentFine': 'soilPercentFine',
-            #   'annualReturnInterval':'',
-            #   'contribArea_Km':'',
-            'initFineChannelStorProp': 'channelStoreFine'
-        })
-        instream_fine_sediment_params['channelStoreFine'] = - instream_fine_sediment_params['channelStoreFine']
+            instream_nutrient_params = _rename_link_tag_columns(
+                self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_DissolvedNut_Model'), link_renames, 'Link')
+            instream_nutrient_params['uptakeVelocity'] = instream_nutrient_params['UptakeVelocity']
+            instream_nutrient_params = instream_nutrient_params.set_index('catchment')
+            instream_nutrient_params = instream_nutrient_params.join(link_attributes, how='inner').reset_index()
+            #   print(instream_nutrient_params)
+            instream_nutrient_parameteriser = ParameterTableAssignment(instream_nutrient_params,
+                                                                    'InstreamDissolvedNutrientDecay',
+                                                                    dim_columns=['catchment'],
+                                                                    complete=False)
+            res.nested.append(instream_nutrient_parameteriser)
 
-        instream_fine_sed_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'InstreamFineSediment',
-                                                                   dim_columns=['catchment'],complete=False)
-        res.nested.append(instream_fine_sed_parameteriser)
+            instream_fine_sediment_params = instream_fine_sediment_params.rename(columns={
+                'BankFullFlow': 'bankFullFlow',
+                'BankHeight_M': 'bankHeight',
+                'FloodPlainArea_M2': 'floodPlainArea',
+                #   'LinkHeight_M':'bankHeight',
+                'LinkLength_M': 'linkLength',
+                'LinkWidth_M': 'linkWidth',
+                'Link_Slope': 'linkSlope',
+                'LongTermAvDailyFlow': 'longTermAvDailyFlow',
+                'ManningsN': 'manningsN',
+                'RiparianVegPercent': 'riparianVegPercent',
+                'SoilErodibility': 'soilErodibility',
+                'SoilPercentFine': 'soilPercentFine',
+                #   'annualReturnInterval':'',
+                #   'contribArea_Km':'',
+                'initFineChannelStorProp': 'channelStoreFine'
+            })
+            instream_fine_sediment_params['channelStoreFine'] = - instream_fine_sediment_params['channelStoreFine']
 
-        bank_erosion_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'BankErosion',
-                                                              dim_columns=['catchment'],complete=False)
-        res.nested.append(bank_erosion_parameteriser)
+            instream_fine_sed_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'InstreamFineSediment',
+                                                                    dim_columns=['catchment'],complete=False)
+            res.nested.append(instream_fine_sed_parameteriser)
 
-        instream_particulate_nutrient_params = _rename_link_tag_columns(
-            self._load_param_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_ParticulateNut_Model'), link_renames, 'Link')
-        instream_particulate_nutrient_params = instream_particulate_nutrient_params.rename(columns={
-            'partNutConc':'particulateNutrientConcentration'
-        })
-        instream_particulate_parameteriser = \
-            ParameterTableAssignment(instream_particulate_nutrient_params,
-                                     'InstreamParticulateNutrient',
-                                     dim_columns=['catchment','constituent'])
-        res.nested.append(instream_particulate_parameteriser)
+            bank_erosion_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'BankErosion',
+                                                                dim_columns=['catchment'],complete=False)
+            res.nested.append(bank_erosion_parameteriser)
 
-        instream_particulate_sed_parameteriser = \
-            ParameterTableAssignment(instream_fine_sediment_params[['catchment','soilPercentFine']],
-                                     'InstreamParticulateNutrient',
-                                     dim_columns=['catchment'],complete=False)
-        res.nested.append(instream_particulate_sed_parameteriser)
+            instream_particulate_nutrient_params = _rename_link_tag_columns(
+                self._load_param_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_ParticulateNut_Model'), link_renames, 'Link')
+            instream_particulate_nutrient_params = instream_particulate_nutrient_params.rename(columns={
+                'partNutConc':'particulateNutrientConcentration'
+            })
+            instream_particulate_parameteriser = \
+                ParameterTableAssignment(instream_particulate_nutrient_params,
+                                        'InstreamParticulateNutrient',
+                                        dim_columns=['catchment','constituent'])
+            res.nested.append(instream_particulate_parameteriser)
+
+            instream_particulate_sed_parameteriser = \
+                ParameterTableAssignment(instream_fine_sediment_params[['catchment','soilPercentFine']],
+                                        'InstreamParticulateNutrient',
+                                        dim_columns=['catchment'],complete=False)
+            res.nested.append(instream_particulate_sed_parameteriser)
 
         return res
 
