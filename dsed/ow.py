@@ -11,7 +11,7 @@ from openwater import OWTemplate, OWLink
 from openwater.template import TAG_MODEL
 import openwater.nodes as n
 from collections import defaultdict
-from openwater.examples.from_source import get_default_node_template
+from openwater.examples.from_source import get_default_node_template, DEFAULT_NODE_TEMPLATES, storage_template_builder
 from openwater.catchments import \
     DOWNSTREAM_FLOW_FLUX, DOWNSTREAM_LOAD_FLUX, \
     UPSTREAM_FLOW_FLUX, UPSTREAM_LOAD_FLUX
@@ -361,6 +361,12 @@ class DynamicSednetCatchment(object):
 
         self._g = None
         self._g_lookup = {}
+
+        self.node_templates = DEFAULT_NODE_TEMPLATES.copy()
+        self.node_templates['Storage'] = storage_template_builder(constituent_model_map=defaultdict(lambda:n.LumpedConstituentRouting,{
+            FINE_SEDIMENT:n.StorageParticulateTrapping,
+            COARSE_SEDIMENT:n.StorageParticulateTrapping
+        }))
 
         def get_model_dissolved_nutrient(*args,**kwargs):
             cgu = kwargs['cgu']
