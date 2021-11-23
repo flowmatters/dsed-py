@@ -237,10 +237,10 @@ class DynamicSednetCGU(object):
             template.define_output(fine_sum,'out','generatedLoad',constituent=FINE_SEDIMENT)
             template.define_output(coarse_sum,'out','generatedLoad',constituent=COARSE_SEDIMENT)
 
-        if self.cropping_cgu:
-            for con in catchment_template.pesticides:
-                dwc_node = add_emc_dwc(con)
 
+        for con in catchment_template.pesticides:
+            dwc_node = add_emc_dwc(con)
+            if self.cropping_cgu:
                 ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=con,**kwargs)
                 link_runoff(ts_node,'flow',None)
 
@@ -693,7 +693,9 @@ class OpenwaterDynamicSednetResults(object):
             return EMC
 
         if c in self.meta['pesticides']:
-            return SUM
+            if fu in self.meta['cropping_cgus']:
+                return SUM
+            return EMC
 
         if c in self.meta['dissolved_nutrients']:
             if fu in ['Water']: #,'Conservation','Horticulture','Other','Urban','Forestry']:
