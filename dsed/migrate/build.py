@@ -382,10 +382,10 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             gbr_crop_sed_params = gbr_crop_sed_params.rename(
                 columns={c: c.replace('_', '') for c in gbr_crop_sed_params.columns})
 
-            if fine_sediment_params is not None:
-                fine_sediment_params = pd.concat([fine_sediment_params, gbr_crop_sed_params], sort=False)
-            else:
+            if fine_sediment_params is None:
                 fine_sediment_params = gbr_crop_sed_params
+            else:
+                fine_sediment_params = pd.concat([fine_sediment_params, gbr_crop_sed_params], sort=False)
 
         #This is checking for our EMC _ Gully model that also has gully inputs
         #if(len(meta['emc_plus_gully_cgus']) > 0):
@@ -404,10 +404,10 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             gbr_emc_gully_params = gbr_emc_gully_params.rename(
                 columns={c: c.replace('_', '') for c in gbr_emc_gully_params.columns})
 
-            if fine_sediment_params is not None:
-                fine_sediment_params = pd.concat([fine_sediment_params, gbr_crop_sed_params,gbr_emc_gully_params], sort=False)
-            else:
+            if fine_sediment_params is None:
                 fine_sediment_params = gbr_emc_gully_params
+            else:
+                fine_sediment_params = pd.concat([fine_sediment_params, gbr_emc_gully_params], sort=False)
 
             fine_sediment_params = fine_sediment_params.rename(columns={
                 'GullyYearDisturb': 'YearDisturbance',
@@ -430,6 +430,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             gully_parameters = ParameterTableAssignment(gully_params, node_types.DynamicSednetGully,
                                                         dim_columns=['catchment', 'cgu'])
             res.nested.append(gully_parameters)
+
             ts_load_hillslope_fine = gully_params.pivot('catchment', 'cgu', 'HillSlopeFinePerc') / 100.0
             hillslope_fine = ParameterTableAssignment(ts_load_hillslope_fine, node_types.FixedPartition,
                                                   parameter='fraction', column_dim='cgu', row_dim='catchment')
@@ -563,69 +564,73 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                 res.nested.append(lag_parameters)
 
         instream_fine_sediment_params = self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_Fine_Sediment_Model')
-        if instream_fine_sediment_params is not None:
-            instream_fine_sediment_params = _rename_link_tag_columns(instream_fine_sediment_params, link_renames, 'Link')
 
-            link_attributes = instream_fine_sediment_params[
-                ['catchment', 'LinkLength_M', 'LinkHeight_M', 'LinkWidth_M']].set_index('catchment')
-            link_attributes = link_attributes.rename(
-                columns={'LinkLength_M': 'linkLength', 'LinkHeight_M': 'linkHeight', 'LinkWidth_M': 'linkWidth'})
+        if instream_fine_sediment_params is None:
+            logger.info('No instream fine sediment model found')
+            return res
 
-            instream_nutrient_params = _rename_link_tag_columns(
-                self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_DissolvedNut_Model'), link_renames, 'Link')
-            instream_nutrient_params['uptakeVelocity'] = instream_nutrient_params['UptakeVelocity']
-            instream_nutrient_params = instream_nutrient_params.set_index('catchment')
-            instream_nutrient_params = instream_nutrient_params.join(link_attributes, how='inner').reset_index()
-            #   print(instream_nutrient_params)
-            instream_nutrient_parameteriser = ParameterTableAssignment(instream_nutrient_params,
-                                                                    'InstreamDissolvedNutrientDecay',
-                                                                    dim_columns=['catchment'],
-                                                                    complete=False)
-            res.nested.append(instream_nutrient_parameteriser)
+        instream_fine_sediment_params = _rename_link_tag_columns(instream_fine_sediment_params, link_renames, 'Link')
 
-            instream_fine_sediment_params = instream_fine_sediment_params.rename(columns={
-                'BankFullFlow': 'bankFullFlow',
-                'BankHeight_M': 'bankHeight',
-                'FloodPlainArea_M2': 'floodPlainArea',
-                #   'LinkHeight_M':'bankHeight',
-                'LinkLength_M': 'linkLength',
-                'LinkWidth_M': 'linkWidth',
-                'Link_Slope': 'linkSlope',
-                'LongTermAvDailyFlow': 'longTermAvDailyFlow',
-                'ManningsN': 'manningsN',
-                'RiparianVegPercent': 'riparianVegPercent',
-                'SoilErodibility': 'soilErodibility',
-                'SoilPercentFine': 'soilPercentFine',
-                #   'annualReturnInterval':'',
-                #   'contribArea_Km':'',
-                'initFineChannelStorProp': 'channelStoreFine'
-            })
-            instream_fine_sediment_params['channelStoreFine'] = - instream_fine_sediment_params['channelStoreFine']
+        link_attributes = instream_fine_sediment_params[
+            ['catchment', 'LinkLength_M', 'LinkHeight_M', 'LinkWidth_M']].set_index('catchment')
+        link_attributes = link_attributes.rename(
+            columns={'LinkLength_M': 'linkLength', 'LinkHeight_M': 'linkHeight', 'LinkWidth_M': 'linkWidth'})
 
-            instream_fine_sed_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'InstreamFineSediment',
-                                                                    dim_columns=['catchment'],complete=False)
-            res.nested.append(instream_fine_sed_parameteriser)
+        instream_nutrient_params = _rename_link_tag_columns(
+            self._load_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_DissolvedNut_Model'), link_renames, 'Link')
+        instream_nutrient_params['uptakeVelocity'] = instream_nutrient_params['UptakeVelocity']
+        instream_nutrient_params = instream_nutrient_params.set_index('catchment')
+        instream_nutrient_params = instream_nutrient_params.join(link_attributes, how='inner').reset_index()
+        #   print(instream_nutrient_params)
+        instream_nutrient_parameteriser = ParameterTableAssignment(instream_nutrient_params,
+                                                                'InstreamDissolvedNutrientDecay',
+                                                                dim_columns=['catchment'],
+                                                                complete=False)
+        res.nested.append(instream_nutrient_parameteriser)
 
-            bank_erosion_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'BankErosion',
+        instream_fine_sediment_params = instream_fine_sediment_params.rename(columns={
+            'BankFullFlow': 'bankFullFlow',
+            'BankHeight_M': 'bankHeight',
+            'FloodPlainArea_M2': 'floodPlainArea',
+            #   'LinkHeight_M':'bankHeight',
+            'LinkLength_M': 'linkLength',
+            'LinkWidth_M': 'linkWidth',
+            'Link_Slope': 'linkSlope',
+            'LongTermAvDailyFlow': 'longTermAvDailyFlow',
+            'ManningsN': 'manningsN',
+            'RiparianVegPercent': 'riparianVegPercent',
+            'SoilErodibility': 'soilErodibility',
+            'SoilPercentFine': 'soilPercentFine',
+            #   'annualReturnInterval':'',
+            #   'contribArea_Km':'',
+            'initFineChannelStorProp': 'channelStoreFine'
+        })
+        instream_fine_sediment_params['channelStoreFine'] = - instream_fine_sediment_params['channelStoreFine']
+
+        instream_fine_sed_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'InstreamFineSediment',
                                                                 dim_columns=['catchment'],complete=False)
-            res.nested.append(bank_erosion_parameteriser)
+        res.nested.append(instream_fine_sed_parameteriser)
 
-            instream_particulate_nutrient_params = _rename_link_tag_columns(
-                self._load_param_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_ParticulateNut_Model'), link_renames, 'Link')
-            instream_particulate_nutrient_params = instream_particulate_nutrient_params.rename(columns={
-                'partNutConc':'particulateNutrientConcentration'
-            })
-            instream_particulate_parameteriser = \
-                ParameterTableAssignment(instream_particulate_nutrient_params,
-                                        'InstreamParticulateNutrient',
-                                        dim_columns=['catchment','constituent'])
-            res.nested.append(instream_particulate_parameteriser)
+        bank_erosion_parameteriser = ParameterTableAssignment(instream_fine_sediment_params, 'BankErosion',
+                                                            dim_columns=['catchment'],complete=False)
+        res.nested.append(bank_erosion_parameteriser)
 
-            instream_particulate_sed_parameteriser = \
-                ParameterTableAssignment(instream_fine_sediment_params[['catchment','soilPercentFine']],
-                                        'InstreamParticulateNutrient',
-                                        dim_columns=['catchment'],complete=False)
-            res.nested.append(instream_particulate_sed_parameteriser)
+        instream_particulate_nutrient_params = _rename_link_tag_columns(
+            self._load_param_csv('cr-Dynamic_SedNet.Models.SedNet_InStream_ParticulateNut_Model'), link_renames, 'Link')
+        instream_particulate_nutrient_params = instream_particulate_nutrient_params.rename(columns={
+            'partNutConc':'particulateNutrientConcentration'
+        })
+        instream_particulate_parameteriser = \
+            ParameterTableAssignment(instream_particulate_nutrient_params,
+                                    'InstreamParticulateNutrient',
+                                    dim_columns=['catchment','constituent'])
+        res.nested.append(instream_particulate_parameteriser)
+
+        instream_particulate_sed_parameteriser = \
+            ParameterTableAssignment(instream_fine_sediment_params[['catchment','soilPercentFine']],
+                                    'InstreamParticulateNutrient',
+                                    dim_columns=['catchment'],complete=False)
+        res.nested.append(instream_particulate_sed_parameteriser)
 
         return res
 
