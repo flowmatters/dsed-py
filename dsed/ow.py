@@ -581,7 +581,8 @@ class DynamicSednetCatchment(object):
         return template
 
     def get_node_template(self,node_type,**kwargs):
-        return get_default_node_template(node_type,constituents=self.constituents,**kwargs)
+        assert self.node_templates is not None
+        return get_default_node_template(node_type,constituents=self.constituents,templates=self.node_templates,**kwargs)
 
     def link_catchments(self,graph,upstream,downstream):
         STANDARD_LINKS = defaultdict(lambda:[None,None],{
