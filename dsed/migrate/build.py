@@ -95,9 +95,10 @@ def _rename_link_tag_columns(dataframe, link_renames, link_col='NetworkElement')
 def build_ow_model(data_path, start=DEFAULT_START, end=DEFAULT_END,
                    link_renames=None,
                    replay_hydro=False,
+                   existing_model=None,
                    progress=logger.info):
     builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end)
-    return builder.build_ow_model(link_renames,progress)
+    return builder.build_ow_model(link_renames,progress=progress,existing_model=existing_model)
 
 class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurationProvider):
     def __init__(self,data_path,replay_hydro=False,start=DEFAULT_START,end=DEFAULT_END):
@@ -630,6 +631,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
     def build_ow_model(self,
                        link_renames=None,
+                       existing_model=None,
                        progress=print):
         init_timer('Build')
         init_timer('Read structure data')
@@ -660,33 +662,12 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         # template_image = debugging.graph_template(tpl)
         # template_image.render('cgu_template', format='png')
 
-        def setup_dates(g):
-            date_tpl = OWTemplate()
-            date_tags = {
-                'calendar': 1
-            }
-            date_tags[TAG_PROCESS] = 'date_gen'
+        if existing_model is None:
+            model = self.build_structure(meta,network)
+        else:
+            model = existing_model
 
-            date_tpl.add_node(node_types.DateGenerator, **date_tags)
-            g = templating.template_to_graph(g, date_tpl)
-            date_node = [n for n in g.nodes if g.nodes[n][TAG_MODEL] == 'DateGenerator'][0]
-            usle_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] == 'USLEFineSedimentGeneration']
-            # progress('USLE Nodes:', len(usle_nodes))
-            for usle in usle_nodes:
-                g.add_edge(date_node, usle, src=['dayOfYear'], dest=['dayOfYear'])
-
-            gully_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] in ['DynamicSednetGullyAlt','DynamicSednetGully']]
-            for gully in gully_nodes:
-                g.add_edge(date_node, gully, src=['year'], dest=['year'])
-
-            return g
-
-        report_time('Build template')
-        catchment_template = self.build_catchment_template(meta)
-        report_time('Build graph')
-        model = from_source.build_catchment_graph(catchment_template, network, progress=nop, custom_processing=setup_dates)
         report_time('Build basic parameterisers')
-
         p = Parameteriser()
         p._parameterisers.append(DefaultParameteriser())
         p._parameterisers.append(self._date_parameteriser(meta))
@@ -720,6 +701,35 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         meta['warnings'] = self.warnings
 
         return model, meta, network
+
+    def build_structure(self,meta,network):
+        def setup_dates(g):
+            date_tpl = OWTemplate()
+            date_tags = {
+                'calendar': 1
+            }
+            date_tags[TAG_PROCESS] = 'date_gen'
+
+            date_tpl.add_node(node_types.DateGenerator, **date_tags)
+            g = templating.template_to_graph(g, date_tpl)
+            date_node = [n for n in g.nodes if g.nodes[n][TAG_MODEL] == 'DateGenerator'][0]
+            usle_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] == 'USLEFineSedimentGeneration']
+            # progress('USLE Nodes:', len(usle_nodes))
+            for usle in usle_nodes:
+                g.add_edge(date_node, usle, src=['dayOfYear'], dest=['dayOfYear'])
+
+            gully_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] in ['DynamicSednetGullyAlt','DynamicSednetGully']]
+            for gully in gully_nodes:
+                g.add_edge(date_node, gully, src=['year'], dest=['year'])
+
+            return g
+
+        report_time('Build template')
+        catchment_template = self.build_catchment_template(meta)
+        report_time('Build graph')
+        model = from_source.build_catchment_graph(catchment_template, network, progress=nop, custom_processing=setup_dates)
+
+        return model
 
     def hydro_timeseries_inputter(self,link_renames):
         HRU_TEMPLATE='${cgu}: ${catchment}'
