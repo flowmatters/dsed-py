@@ -58,3 +58,6 @@ class DynamicSednetExtractor(SourceExtractor):
         super()._extract_generation_configuration()
 
 
+if __name__=='__main__':
+    print('Extract')
+

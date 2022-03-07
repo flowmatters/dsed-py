@@ -36,3 +36,7 @@ def problem_counts(df,*args):
     nonzero = df[df['sum-orig']>0]
 
     return pd.DataFrame(grouped_lengths(df,problems,nonzero,*args))
+
+if __name__=='__main__':
+    print('Compare')
+
