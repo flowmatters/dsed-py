@@ -249,6 +249,8 @@ class DynamicSednetCGU(object):
                 template.add_link(OWLink(ts_node,'outputLoad',sum_node,'i2'))
 
                 template.define_output(sum_node,'out','generatedLoad')
+            else:
+              template.define_output(dwc_node,'totalLoad','generatedLoad')
 
         for con in catchment_template.constituents:
             if not self.sediment_fallback_model and (con in [FINE_SEDIMENT,COARSE_SEDIMENT]):
