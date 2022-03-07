@@ -717,17 +717,19 @@ class OpenwaterDynamicSednetResults(object):
                (c in self.meta['ts_load']['constituents']):
                return SUM
 
-            if fu == 'Sugarcane':
+            pesticide_cgus = self.meta.get('pesticide_cgus',[])
+            if (fu == 'Sugarcane') and (fu in pesticide_cgus):
                 if c=='N_DIN':
                     return SUM
                 elif c=='N_DON':
                     return EMC
                 elif c.startswith('P'):
                     return EMC
+
             if (fu == 'Bananas') and (c=='N_DIN'):
                 return SUM
 
-            if fu in self.meta['cropping_cgus'] or fu in self.meta.get('pesticide_cgus',[]):
+            if fu in self.meta['cropping_cgus'] or fu in pesticide_cgus:
                 if c.startswith('P'):
                     return 'PassLoadIfFlow', 'outputLoad'
 
