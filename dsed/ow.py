@@ -414,6 +414,8 @@ class DynamicSednetCatchment(object):
         for pn in particulate_nutrients:
             self.cg[pn] = get_model_particulate_nutrient
             self.transport[pn] = n.InstreamParticulateNutrient
+        for ps in pesticides:
+          self.transport[ps] = n.ConstituentDecay
 
     def model_for(self,provider,*args,**kwargs):
         if hasattr(provider,'__call__'):
@@ -743,7 +745,8 @@ class OpenwaterDynamicSednetResults(object):
     def transport_model(self,c):
         LCR = 'LumpedConstituentRouting','outflowLoad'
         if c in self.meta['pesticides']:
-            return LCR
+          # was LCR
+          return 'ConstituentDecay', 'outflowLoad'
         if c in self.meta['dissolved_nutrients']:
             return 'InstreamDissolvedNutrientDecay', 'loadDownstream'
         if c in self.meta['particulate_nutrients']:

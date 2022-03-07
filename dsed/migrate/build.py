@@ -588,6 +588,15 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                                                                 complete=False)
         res.nested.append(instream_nutrient_parameteriser)
 
+        pesticide_transport_params = self._load_csv('cr-GBR_DynSed_Extension.Models.GBR_Stream_Pesticides_Model')
+        if pesticide_transport_params is not None:
+          pesticide_decay_params = _rename_link_tag_columns(pesticide_transport_params, link_renames, 'Link')
+          pesticide_decay_parameteriser = ParameterTableAssignment(pesticide_decay_params,
+                                                                  'ConstituentDecay',
+                                                                    dim_columns=['catchment'],
+                                                                    complete=False)
+          res.nested.append(pesticide_decay_parameteriser)
+
         instream_fine_sediment_params = instream_fine_sediment_params.rename(columns={
             'BankFullFlow': 'bankFullFlow',
             'BankHeight_M': 'bankHeight',
