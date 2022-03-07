@@ -650,10 +650,10 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         init_timer('Build')
         init_timer('Read structure data')
         network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
-        self.network = _extend_network(self._load_json('network'))
+        # self._network = _extend_network(self._load_json('network'))
 
         if link_renames is None:
-            link_renames = map_link_name_mismatches(self.network)
+            link_renames = map_link_name_mismatches(self.network())
         # self.time_period = pd.date_range(start, end)
 
         cropping = self._load_time_series_csv('cropping')
@@ -744,6 +744,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         model = from_source.build_catchment_graph(catchment_template, network, progress=nop, custom_processing=setup_dates)
 
         return model
+
+    # def network(self):
+    #     return self._network
 
     def hydro_timeseries_inputter(self,link_renames):
         HRU_TEMPLATE='${cgu}: ${catchment}'
