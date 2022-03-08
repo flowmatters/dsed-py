@@ -841,8 +841,13 @@ def map_link_name_mismatches(network):
 
     return result
 
+def _arg_parser():
+    import veneer.extract_config as ec
+    parser = ec._base_arg_parser()
+    return parser
+
 if __name__=='__main__':
-    print('Build')
-
-
+    import veneer.extract_config as ec
+    args = ec._parsed_args(_arg_parser())
+    # extract(DynamicSednetExtractor,**args)
 

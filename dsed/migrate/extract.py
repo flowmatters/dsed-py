@@ -3,8 +3,14 @@ import json
 import os
 import pandas as pd
 from veneer.extract_config import *
+import veneer.extract_config as ec
 from veneer.actions import get_big_data_source
 import veneer
+
+PLUGINS=[
+    'Dynamic_SedNet.dll',
+    'GBR_DynSed_Extension.dll'
+]
 
 def _BEFORE_BATCH_NOP(slf,x,y):
     pass
@@ -57,7 +63,13 @@ class DynamicSednetExtractor(SourceExtractor):
 
         super()._extract_generation_configuration()
 
+def _arg_parser():
+    parser = ec._arg_parser()
+    parser.add_argument('--pluginpath',help='Path to Dynamic Sednet plugins')
+    return parser
 
 if __name__=='__main__':
-    print('Extract')
+    args = ec._parsed_args(_arg_parser())
+    args['plugins'] += [os.path.abspath(os.path.join(args['pluginpath'] or '.',p)) for p in PLUGINS]
+    extract(DynamicSednetExtractor,**args)
 
