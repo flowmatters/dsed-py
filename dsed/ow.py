@@ -698,11 +698,12 @@ class OpenwaterDynamicSednetResults(object):
     def generation_model(self,c,fu):
         EMC = 'EmcDwc','totalLoad'
         SUM = 'Sum','out'
+        NONE = None,None
 
         if c in self.meta['sediments']:
             if fu in (self.meta['usle_cgus']+self.meta['cropping_cgus']+self.meta['gully_cgus']):
                 return SUM
-            return EMC
+            return NONE
 
         if c in self.meta['pesticides']:
             if fu in self.meta['cropping_cgus']:
