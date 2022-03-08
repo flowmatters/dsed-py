@@ -307,9 +307,16 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         meta['gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,GULLY_MODELS)
         meta['hillslope_emc_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,EMC_DWC_MODELS)
         meta['emc_plus_gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,DS_EMC_GULLY_MODEL)
+
+        ts_load_models = [
+          'GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel',
+          'Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model'
+        ]
+        ts_load_instances = cg_models[cg_models.model.isin(ts_load_models)][['Functional Unit','Constituent']].drop_duplicates()
         meta['ts_load'] = {
-            'cgus': list(set(cg_models[cg_models.model=='Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model']['Functional Unit'])),
-            'constituents':list(set(cg_models[cg_models.model=='Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model']['Constituent'])),
+            'combos': [list(x) for x in zip(ts_load_instances['Functional Unit'],ts_load_instances['Constituent'])],
+            'cgus': list(set(ts_load_instances['Functional Unit'])),
+            'constituents':list(set(ts_load_instances['Constituent'])),
         }
 
         return meta

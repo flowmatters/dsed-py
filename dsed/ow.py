@@ -259,13 +259,14 @@ class DynamicSednetCGU(object):
             if con in catchment_template.pesticides:
                 continue
 
-            ts_cane_din = (cgu in CGUS_TS_N_DIN) and (con=='N_DIN')
+            din_leaching = (cgu in CGUS_TS_N_DIN) and (con=='N_DIN')
             ts_crop_part_p = (con == 'P_Particulate') and self.cropping_cgu and not cgu=='Sugarcane'
-            ts_load_with_dwc = self.ts_load_with_dwc and \
-                               (con in self.ts_load_with_dwc['constituents']) and \
-                               (cgu in self.ts_load_with_dwc['cgus'])
+            use_ts_load_with_dwc = dissolved_nutrient_ts_load(self.ts_load_with_dwc,cgu=cgu,constituent=con)
+            # ts_load_with_dwc = self.ts_load_with_dwc and \
+            #                    (con in self.ts_load_with_dwc['constituents']) and \
+            #                    (cgu in self.ts_load_with_dwc['cgus'])
 
-            if ts_cane_din or ts_crop_part_p or ts_load_with_dwc:
+            if ts_crop_part_p or use_ts_load_with_dwc: # ts_cane_din or
                 ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent=con,**kwargs)
                 link_runoff(ts_node,'flow',None)
 
@@ -278,7 +279,7 @@ class DynamicSednetCGU(object):
                 template.add_link(OWLink(ts_scale_node,'output',sum_node,'i1'))
                 template.add_link(OWLink(dwc_node,'totalLoad',sum_node,'i2'))
 
-                if ts_cane_din:
+                if din_leaching:
                     leached_ts_node = template.add_node(n.PassLoadIfFlow,process='ConstituentOtherGeneration',constituent='NLeached',**kwargs)
                     link_runoff(leached_ts_node,None,'flow')
 
@@ -712,9 +713,7 @@ class OpenwaterDynamicSednetResults(object):
             if fu in ['Water']: #,'Conservation','Horticulture','Other','Urban','Forestry']:
                 return EMC
 
-            if (self.meta['ts_load'] is not None) and \
-               (fu in self.meta['ts_load']['cgus']) and \
-               (c in self.meta['ts_load']['constituents']):
+            if dissolved_nutrient_ts_load(self.meta['ts_load'],cgu=fu,constituent=c):
                return SUM
 
             pesticide_cgus = self.meta.get('pesticide_cgus',[])
@@ -935,3 +934,15 @@ def _ensure_uncompressed(fn):
         raise Exception('File not found (compressed or uncompressed): %s'%fn)
     os.system('gunzip %s'%gzfn)
     assert os.path.exists(fn)
+
+def dissolved_nutrient_ts_load(ts_load_meta,constituent,cgu):
+  if ts_load_meta is None:
+    return False
+  if 'combos' not in ts_load_meta:
+    return False
+
+  combos = ts_load_meta['combos']
+
+  matching_combos = [c for c in combos if (c[0]==cgu) and (c[1]==constituent)]
+  return len(matching_combos) > 0
+
