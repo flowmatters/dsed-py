@@ -22,7 +22,11 @@ class DynamicSednetExtractor(SourceExtractor):
     def _extract_runoff_configuration(self):
         runoff_params = self.v.model.catchment.runoff.tabulate_parameters()
         actual_rr_types = set(self.v.model.catchment.runoff.get_param_values('theBaseRRModel'))
-        assert len(actual_rr_types) == 1
+        if len(actual_rr_types) != 1:
+            msg = f'Expected only Sacramento. Have {actual_rr_types}'
+            print(msg)
+            self.progress(msg)
+            assert False
         sac_parameters = {k:self.v.model.catchment.runoff.get_param_values('theBaseRRModel.%s'%k) for k in self.v.model.find_parameters('TIME.Models.RainfallRunoff.Sacramento.Sacramento')}
         name_columns = self.v.model.catchment.runoff.name_columns
         sac_names = list(self.v.model.catchment.runoff.enumerate_names())
