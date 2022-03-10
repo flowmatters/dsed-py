@@ -92,13 +92,16 @@ def _rename_link_tag_columns(dataframe, link_renames, link_col='NetworkElement')
 
     return dataframe
 
-def build_ow_model(data_path, start=DEFAULT_START, end=DEFAULT_END,
+def build_ow_model(data_path, time_period=None,start=DEFAULT_START, end=DEFAULT_END,
                    link_renames=None,
                    replay_hydro=False,
-                   existing_model=None,
+                   existing=None,
                    progress=logger.info):
+    if time_period is not None:
+      start = time_period[0]
+      end = time_period[-1]
     builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end)
-    return builder.build_ow_model(link_renames,progress=progress,existing_model=existing_model)
+    return builder.build_ow_model(link_renames,progress=progress,existing_model=existing)
 
 class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurationProvider):
     def __init__(self,data_path,replay_hydro=False,start=DEFAULT_START,end=DEFAULT_END):
@@ -849,12 +852,11 @@ def map_link_name_mismatches(network):
     return result
 
 def _arg_parser():
-    import veneer.extract_config as ec
-    parser = ec._base_arg_parser()
-    return parser
+  parser = from_source._arg_parser()
+  parser.add_argument('--replay', help='Replay the results of hydrology from the Source implementation', action='store_true')
+  return parser
 
 if __name__=='__main__':
-    import veneer.extract_config as ec
-    args = ec._parsed_args(_arg_parser())
-    # extract(DynamicSednetExtractor,**args)
-
+  import veneer.extract_config as ec
+  args = ec._parsed_args(_arg_parser())
+  from_source.build_main(build_ow_model,**args)
