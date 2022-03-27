@@ -11,6 +11,7 @@ from openwater import OWTemplate, OWLink
 from openwater.template import TAG_MODEL
 import openwater.nodes as n
 from collections import defaultdict
+from openwater.examples import OpenwaterCatchmentModelResults
 from openwater.examples.from_source import get_default_node_template, DEFAULT_NODE_TEMPLATES, storage_template_builder
 from openwater.catchments import \
     DOWNSTREAM_FLOW_FLUX, DOWNSTREAM_LOAD_FLUX, \
@@ -634,7 +635,7 @@ def main_output_flux(model):
         return 'outputLoad'
     return 'totalLoad'
 
-class OpenwaterDynamicSednetResults(object):
+class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
     def __init__(self, fn, res_fn=None):
         self.fn = fn
         self.ow_model_fn = self.filename_from_base('.h5')
@@ -643,6 +644,7 @@ class OpenwaterDynamicSednetResults(object):
 
         self.ow_results_fn = res_fn or self.filename_from_base('_outputs.h5')
         self.dates = pd.date_range(self.meta['start'], self.meta['end'])
+        self.time_period = self.dates
         self.open_files()
 
     def filename_from_base(self,fn):
@@ -673,27 +675,6 @@ class OpenwaterDynamicSednetResults(object):
                                         self.ow_results_fn,
                                         self.dates)
         self.model = ModelFile(self.ow_model_fn)
-
-    def regulated_links(self):
-        from veneer.extensions import _feature_id
-        network = self.network
-        outlet_nodes = network.outlet_nodes()
-        outlets = [n['properties']['name'] for n in outlet_nodes]
-        network.partition(outlets,'outlet')
-        storages = network['features'].find_by_icon('/resources/StorageNodeModel')
-        extractions = network['features'].find_by_icon('/resources/ExtractionNodeModel')
-
-        impacted_by_storage = []
-        for s in storages._list+extractions._list:
-            outlet = s['properties']['outlet']
-            outlet_id = _feature_id(network['features'].find_by_name(outlet)[0])
-            impacted_by_storage += network.path_between(s,outlet_id)
-
-        ids = set([_feature_id(f) for f in impacted_by_storage])
-        network_df = network.as_dataframe()
-        impacted_by_storage = network_df[network_df['id'].isin(ids)]
-        links_downstream_storage = [l.replace('link for catchment ','') for l in impacted_by_storage[impacted_by_storage.feature_type=='link'].name]
-        return links_downstream_storage
 
     def generation_model(self,c,fu):
         EMC = 'EmcDwc','totalLoad'
