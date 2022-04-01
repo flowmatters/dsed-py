@@ -836,6 +836,8 @@ class DynamicSednetStandardReporting(object):
                 combo = self.impl.generation_model(con,fu)
                 if not combo in seen:
                     model,flux = combo
+                    if model is None:
+                      continue
                     tbl = self.results.table(model,flux,'constituent','cgu','sum','sum') * PER_SECOND_TO_PER_DAY
                     seen[combo]=tbl
                 tbl = seen[combo]
@@ -851,39 +853,57 @@ class DynamicSednetStandardReporting(object):
     def overall_summary_table(self):
         return self.mass_balance_summary_table()
 
+    def _get_final_constituent_store(self,model,store,constituent,region=None):
+      values = self.get_final_states(model)
+      if constituent is not None:
+          values['constituent']=constituent
+      tbl = values[['constituent',store]].groupby('constituent').sum().reset_index().rename(columns={
+          'constituent':'Constituent',
+          store:'Total_Load_in_Kg'
+      })
+      return tbl
+
     def constituent_loss_table(self,region=None):
-        loss_fluxes = [
-            ('InstreamFineSediment','loadToFloodplain','Sediment - Fine'),
-            ('InstreamDissolvedNutrientDecay','loadToFloodplain'),
-            # ('InstreamDissolvedNutrientDecay','loadDecayed'), #TODO
+      loss_fluxes = [
+          ('InstreamFineSediment','loadToFloodplain','Sediment - Fine'),
+          ('InstreamDissolvedNutrientDecay','loadToFloodplain',None),
+          ('InstreamParticulateNutrient','loadToFloodplain',None)
+          # ('InstreamDissolvedNutrientDecay','loadDecayed',{}), #TODO
+      ]
 
-        ]
+      loss_tables = []
+      for model, flux, constituent in loss_fluxes:
+        if constituent is None:
+          tbl = self.results.time_series(model,flux,'constituent','sum').sum() * PER_SECOND_TO_PER_DAY
+        else:
+          tbl = pd.DataFrame({constituent:[self.results.time_series(model,flux,'catchment').sum().sum() * PER_SECOND_TO_PER_DAY]})
+          tbl = tbl.transpose()[0]
+        loss_tables.append(tbl)
 
-        loss_states = [
-            ('InstreamFineSediment','channelStoreFine','Sediment - Fine')
-        ]
-        pass
+      loss_states = [
+          ('InstreamFineSediment','channelStoreFine','Sediment - Fine'),
+          ('InstreamParticulateNutrient','channelStoredMass',None),
+          ('InstreamCoarseSediment','totalStoredMass', 'Sediment - Coarse')
+      ]
+      for model, state, constituent in loss_states:
+        loss_tables.append(self._get_final_constituent_store(model,state,constituent,region).set_index('Constituent')['Total_Load_in_Kg'])
+      overall = pd.DataFrame(pd.concat(loss_tables)).reset_index().groupby('index').sum()
+      overall = overall.reset_index().rename(columns={'index':'Constituent',0:'Total_Load_in_Kg'})
+      return overall
 
     def residual_constituent_table(self,region=None):
         # Need to query final states (and initial states?)
         mass_states = [
             ('LumpedConstituentRouting','storedMass'),
             ('InstreamFineSediment','totalStoredMass', 'Sediment - Fine'),
-            ('InstreamDissolvedNutrientDecay','totalStoredMass'),
-            ('InstreamCoarseSediment','totalStoredMass', 'Sediment - Coarse')
+            ('InstreamDissolvedNutrientDecay','totalStoredMass')
         ]
         tables = []
         for state in mass_states:
             m = state[0]
             v = state[1]
-            values = self.get_final_states(m)
-            if len(state)>2:
-                values['constituent']=state[2]
-            tbl = values[['constituent',v]].groupby('constituent').sum().reset_index().rename(columns={
-                'constituent':'Constituent',
-                v:'Total_Load_in_Kg'
-            })
-            tables.append(tbl)
+            constituent = state[2] if len(state)>2 else None
+            tables.append(self._get_final_constituent_store(m,v,constituent,region))
         return pd.concat(tables).groupby('Constituent').sum().reset_index()
 
     def mass_balance_summary_table(self,region=None):
