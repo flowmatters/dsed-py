@@ -1,5 +1,8 @@
 from openwater.file import _tabulate_model_scalars_from_file
+import os
 import shutil
+import pandas as pd
+import numpy as np
 from dsed.const import *
 
 class DynamicSednetStandardReporting(object):

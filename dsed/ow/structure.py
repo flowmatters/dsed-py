@@ -1,24 +1,15 @@
 '''
 Running Dynamic Sednet simulations using OpenWater
 '''
-import os
-import json
-import pandas as pd
-import geopandas as gpd
-import shutil
-import numpy as np
 from openwater import OWTemplate, OWLink
 from openwater.template import TAG_MODEL
 import openwater.nodes as n
 from collections import defaultdict
-from openwater.examples import OpenwaterCatchmentModelResults
 from openwater.examples.from_source import get_default_node_template, DEFAULT_NODE_TEMPLATES, storage_template_builder
 from openwater.catchments import \
     DOWNSTREAM_FLOW_FLUX, DOWNSTREAM_LOAD_FLUX, \
     UPSTREAM_FLOW_FLUX, UPSTREAM_LOAD_FLUX
-from openwater.results import OpenwaterResults
-from openwater.template import ModelFile
-from .const import *
+from dsed.const import *
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 
@@ -634,14 +625,6 @@ def main_output_flux(model):
         return 'outputLoad'
     return 'totalLoad'
 
-def _ensure_uncompressed(fn):
-    if os.path.exists(fn):
-        return
-    gzfn = fn + '.gz'
-    if not os.path.exists(gzfn):
-        raise Exception('File not found (compressed or uncompressed): %s'%fn)
-    os.system('gunzip %s'%gzfn)
-    assert os.path.exists(fn)
 
 def dissolved_nutrient_ts_load(ts_load_meta,constituent,cgu):
   if ts_load_meta is None:

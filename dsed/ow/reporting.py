@@ -1,4 +1,11 @@
 from openwater.examples import OpenwaterCatchmentModelResults
+from openwater.results import OpenwaterResults
+from openwater.template import ModelFile
+from .structure import dissolved_nutrient_ts_load
+import json
+import geopandas as gpd
+import pandas as pd
+import os
 
 class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
     def __init__(self, fn, res_fn=None):
@@ -106,3 +113,12 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
         if c == 'Sediment - Fine':
             return 'InstreamFineSediment', 'loadDownstream'
         assert False
+
+def _ensure_uncompressed(fn):
+    if os.path.exists(fn):
+        return
+    gzfn = fn + '.gz'
+    if not os.path.exists(gzfn):
+        raise Exception('File not found (compressed or uncompressed): %s'%fn)
+    os.system('gunzip %s'%gzfn)
+    assert os.path.exists(fn)
