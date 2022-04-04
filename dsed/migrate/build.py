@@ -653,6 +653,21 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         return res
 
+    def _constituent_storage_parameteriser(self):
+      params = self._load_csv('swq-GBR_DynSed_Extension.Models.Lewis_Trapping_Model')
+      if params is None:
+        return None
+
+      params = params.rename(columns={
+        'NetworkElement':'node_name',
+        'ReservoirLength':'reservoirLength'
+      })
+
+      storage_params = self._load_csv('storage_params')
+      capacities = dict(zip(storage_params.NetworkElement,storage_params.FullSupplyVolume))
+      params['reservoirCapacity'] = params.node_name.map(capacities)
+      return ParameterTableAssignment(params,'StorageParticulateTrapping',dim_columns=['node_name'])
+
     def build_ow_model(self,
                        link_renames=None,
                        existing_model=None,
@@ -711,6 +726,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         p._parameterisers.append(self._constituent_transport_parameteriser(link_renames,routing_params))
 
         p._parameterisers.append(from_source.node_model_parameteriser(self))
+        lewis = self._constituent_storage_parameteriser()
+        if lewis is not None:
+          p._parameterisers.append(lewis)
         # report_time('Build demand parameteriser')
 
         if self.replay_hydro:
