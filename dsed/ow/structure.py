@@ -357,10 +357,10 @@ class DynamicSednetCatchment(object):
         self._g_lookup = {}
 
         self.node_templates = DEFAULT_NODE_TEMPLATES.copy()
-        self.node_templates['Storage'] = storage_template_builder(constituent_model_map=defaultdict(lambda:n.LumpedConstituentRouting,{
-            FINE_SEDIMENT:n.StorageParticulateTrapping,
-            COARSE_SEDIMENT:n.StorageParticulateTrapping
-        }))
+        storage_constituent_models = defaultdict(
+          lambda:n.LumpedConstituentRouting,
+          {c:n.StorageParticulateTrapping for c in SEDIMENT_CLASSES + particulate_nutrients})
+        self.node_templates['Storage'] = storage_template_builder(constituent_model_map=storage_constituent_models)
 
         def get_model_dissolved_nutrient(*args,**kwargs):
             cgu = kwargs['cgu']
