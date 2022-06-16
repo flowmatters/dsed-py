@@ -5,11 +5,129 @@ import pandas as pd
 import numpy as np
 from dsed.const import *
 
+PRIMARY_TAGS={
+  'Catchment':['catchment'],
+  'Link':['catchment'], # NOT link_name
+  'Node':['node_name']
+}
+
+VALUE_COL='Total_Load_in_Kg'
+
+STANDARD_TRANSPORT_FLUX_NAMES = dict(
+  ConstituentDecay={
+    'Yield':'outflowLoad',
+    'In Flow':'inflowLoad'
+  },
+  InstreamFineSediment={
+    'Yield':'loadDownstream',
+    'In Flow':'upstreamMass',
+    'Streambank':'reachLocalMass'
+  },
+  InstreamCoarseSediment={
+    'Yield':'loadDownstream',
+    'In Flow':'upstreamMass',
+    'Streambank':'reachLocalMass'
+  },
+  InstreamParticulateNutrient={
+    'Yield':'loadDownstream',
+    'In Flow':'incomingMassUpstream'
+  },
+  InstreamDissolvedNutrientDecay={
+    'Yield':'loadDownstream',
+    'In Flow':'incomingMassUpstream'
+  }
+)
+
+STANDARD_TRANSPORT_STORE_NAMES = dict(
+  InstreamFineSediment='totalStoredMass',
+  InstreamCoarseSediment='totalStoredMass',
+  InstreamParticulateNutrient='instreamStoredMass',
+  InstreamDissolvedNutrientDecay='totalStoredMass'
+)
+
+
+def augment_line_item(li,df):
+  df = df[~df.ModelElement.str.startswith('dummy-')].copy()
+  if li.element_type == 'Link':
+    df['FU'] = 'Stream'
+
+  df['BudgetElement']=li.budget_element
+  df['Process']=li.process
+  df['ModelElementType']=li.element_type
+  return df
+
+class TimeSeriesLineItem(object):
+  def __init__(self, model, variable, conversion_factor, element_type, budget_element, process, constituent):
+    self.model = model
+    self.variable = variable
+    self.conversion_factor = conversion_factor
+    self.element_type = element_type
+    self.budget_element = budget_element
+    self.process = process
+    self.constituent = constituent
+
+  def __call__(self, results):
+    tables = []
+    for tag in PRIMARY_TAGS[self.element_type]:
+      if self.constituent is None:
+      # Can call table by catchment/link and constituent
+        res = results.results.table(self.model,self.variable,tag,'constituent','sum','sum')
+        res = res.melt()
+        res = res.rename(columns={tag:'ModelElement','constituent':'Constituent',0:VALUE_COL})
+      else:
+        if self.constituent=='Flow':
+          res = results.results.time_series(self.model,self.variable,tag,'sum').sum().reset_index()
+        else:
+          res = results.results.time_series(self.model,self.variable,tag,'sum',constituent=self.constituent).sum().reset_index()
+        res = res.rename(columns={'index':'ModelElement',0:VALUE_COL})
+        res['Constituent']=self.constituent
+      tables.append(res)
+
+    return augment_line_item(self,pd.concat(tables))
+
+class StateLineItem(object):
+  def __init__(self, selection,model, variable, conversion_factor, element_type, budget_element, process, constituent):
+    self.selection = selection
+    self.model = model
+    self.variable = variable
+    self.conversion_factor = conversion_factor
+    self.element_type = element_type
+    self.budget_element = budget_element
+    self.process = process
+    self.constituent = constituent
+
+  def __call__(self, results):
+    states =  results.get_states[self.selection](self.model)
+    tables = []
+    for tag in PRIMARY_TAGS[self.element_type]:
+      tbl = states[~states[tag].str.startswith('dummy')].copy()
+      tbl = tbl.rename(columns={tag:'ModelElement',self.variable:VALUE_COL})
+      if 'constituent' in tbl.columns:
+        tbl['Constituent']=tbl['constituent']
+        if self.constituent is not None:
+          tbl = tbl[tbl.Constituent==self.constituent]
+      else:
+        tbl['Constituent']=self.constituent
+      tables.append(tbl[['ModelElement','Constituent',VALUE_COL]])
+
+    return augment_line_item(self,pd.concat(tables))
+
+FIXED_LINE_ITEMS = [
+  TimeSeriesLineItem('StorageRouting','outflow',PER_SECOND_TO_PER_DAY,'Link','Link Yield','Yield','Flow'),
+  TimeSeriesLineItem('StorageRouting','inflow',PER_SECOND_TO_PER_DAY,'Link','Link In Flow','In Flow','Flow'),
+  StateLineItem('final','StorageRouting','S',1.0,'Link','Residual Link Storage','Residual','Flow'),
+  StateLineItem('initial','StorageRouting','S',1.0,'Link','Link Initial Load','Supply','Flow'),
+]
+
 class DynamicSednetStandardReporting(object):
     def __init__(self,ow_impl):
         self.impl = ow_impl
         self.results = ow_impl.results
         self.model = ow_impl.model
+        self.get_states = dict(
+          initial=self.get_initial_states,
+          final=self.get_final_states
+        )
 
     def _get_states(self,f,model,**tags):
         mmap = self.model._map_model_dims(model)
@@ -193,3 +311,33 @@ class DynamicSednetStandardReporting(object):
 
     def source_sink_per_fu_summary_table(self,region=None):
       pass
+
+    def raw_summary_table(self,region=None):
+      line_items = FIXED_LINE_ITEMS[:]
+
+      transport_models = [(c,self.impl.transport_model(c)[0]) for c in self.impl.meta['constituents']]
+      for c,model in transport_models:
+        if model is None:
+          continue
+        items = transport_line_items(model)
+        for i in items: i.constituent = c
+        line_items += items
+
+      return self._evaluate_line_items(line_items)
+
+    def _evaluate_line_items(self,line_items):
+      results = [li(self) for li in line_items]
+      return pd.concat(results)
+
+def transport_line_items(model):
+  items = [TimeSeriesLineItem(model,v,PER_SECOND_TO_PER_DAY,'Link','Link '+n,n,None) \
+    for n,v in STANDARD_TRANSPORT_FLUX_NAMES[model].items()]
+  if model in STANDARD_TRANSPORT_STORE_NAMES:
+    items += [
+      StateLineItem('initial',model,STANDARD_TRANSPORT_STORE_NAMES[model],1.0,'Link','Link Initial Load','Supply',None),
+      StateLineItem('final',model,STANDARD_TRANSPORT_STORE_NAMES[model],1.0,'Link','Residual Link Storage','Residual',None)
+    ]
+
+  return items
+
+
