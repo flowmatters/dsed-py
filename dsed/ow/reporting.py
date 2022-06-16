@@ -30,9 +30,11 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
         raw = [json.load(open(self.filename_from_base('.'+c+'.json'),'r')) for c in ['nodes','links','catchments']]
         self.network = {
             'type':'FeatureCollection',
-            'crs':raw[0]['crs'],
             'features':sum([r['features'] for r in raw],[])
         }
+        if 'crs' in raw[0]:
+          self.network['crs']=raw[0]['crs']
+
         self.network = _extend_network(self.network)
 
     def run_model(self):
