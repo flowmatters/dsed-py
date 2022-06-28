@@ -147,13 +147,20 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         scaled_cropping_ts = {}
         for col in cropping.columns:
             constituent, variable, catchment, cgu = col.split('$')
+            if not catchment in dwcs.catchment:
+                continue
+
             if not variable in ['Dissolved_Load_g_per_Ha', 'Particulate_Load_g_per_Ha']:
                 continue
 
             row = dwcs[dwcs.catchment == catchment]
             row = row[row.constituent == constituent]
             row = row[row.cgu == cgu]
-            assert len(row) == 1
+            if len(row) != 1:
+                print(f'Wrong number of rows. Have {len(row)}, expected 1')
+                print(f'CGU={cgu},Constituent={constituent},Catchment={catchment}')
+                print(row)
+                assert False
             row = row.iloc[0]
 
             scale = row['%s_scale' % (variable.split('_')[0].lower())] * row['final_scale']
