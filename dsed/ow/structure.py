@@ -173,7 +173,7 @@ class DynamicSednetCGU(object):
             template.add_link(OWLink(gully_gen,'coarseLoad',coarse_sum,'i2'))
 
             if self.hillslope_cgu:
-                template.add_link(OWLink(sed_gen,'totalLoad',fine_sum,'i1')) # was quickLoadFine
+                template.add_link(OWLink(sed_gen,'totalFineLoad',fine_sum,'i1')) # was quickLoadFine
                 template.add_link(OWLink(sed_gen,'quickLoadCoarse',coarse_sum,'i1'))
             else:
                 fine_dwc_node = add_emc_dwc(FINE_SEDIMENT)
@@ -293,8 +293,8 @@ class DynamicSednetCGU(object):
                 template.add_conditional_link(baseflow_scale_node, 'outflow',gen_node,BASEFLOW_INPUTS,model)
 
             if model.name == 'SednetParticulateNutrientGeneration':
-                template.add_link(OWLink(gully_gen,'generatedFine',gen_node,'fineSedModelFineGullyGeneratedKg'))
-                template.add_link(OWLink(gully_gen,'generatedCoarse',gen_node,'fineSedModelCoarseGullyGeneratedKg'))
+                template.add_link(OWLink(gully_gen,'generatedFine',gen_node,'fineSedModelFineGullyGeneratedKg')) # tried fineLoad
+                template.add_link(OWLink(gully_gen,'generatedCoarse',gen_node,'fineSedModelCoarseGullyGeneratedKg')) # tried coarseLoad
 
                 template.add_link(OWLink(hillslope_fine_sed_gen,hillslope_fine_sed_gen_flux,
                                          gen_node,'fineSedModelFineSheetGeneratedKg'))
