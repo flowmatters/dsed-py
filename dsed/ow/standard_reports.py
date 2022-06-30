@@ -346,8 +346,68 @@ class DynamicSednetStandardReporting(object):
 
         return pd.concat(result).sort_values(['Constituent','MassBalanceElement'])
 
+    def augment_source_sink_fu_table(self,tbl):
+        fus = set(tbl.FU) - {'Stream'}
+        columns = set(tbl.columns) - {'Total_Load_in_Kg'}
+        meta = self.impl.meta
+        extra_rows=[]
+        for fu in fus:
+            for dn in meta['dissolved_nutrients']:
+                extra_rows += [
+                    dict(BudgetElement=be,Constituent=dn,FU=fu,Total_Load_in_Kg=0.0) \
+                    for be in ['Diffuse Dissolved','Undefined']
+                ]
+            for c in meta['particulate_nutrients'] + meta['sediments']:
+                extra_rows += [
+                    dict(BudgetElement=be,Constituent=c,FU=fu,Total_Load_in_Kg=0.0) \
+                    for be in ['Hillslope surface soil','Hillslope no source distinction','Undefined','Gully']
+                ]
+
+        for c in (set(meta['constituents'])-set(meta['pesticides'])):
+            extra_rows += [
+                dict(BudgetElement=be,Constituent=c,FU='Stream',Total_Load_in_Kg=0.0) \
+                for be in ['Node Loss','Stream Decay']
+            ]
+
+        for c in meta['dissolved_nutrients']:
+            extra_rows += [
+                dict(BudgetElement='Denitrification',Constituent=c,FU='Stream',Total_Load_in_Kg=0.0)
+            ]
+            # fu_rows['FU']=fu
+            # fu_rows['Total_Load_in_Kg'] = 0.0
+            # ss_by_fu = pd.concat([ss_by_fu,fu_rows])
+        for c in meta['sediments']:
+            extra_rows += [
+                dict(BudgetElement='Flood Plain Deposition',Constituent=c,FU='Stream',Total_Load_in_Kg=0.0)
+            ]
+        tbl = pd.concat([tbl,pd.DataFrame(extra_rows)]).drop_duplicates(subset=columns,keep='first')
+        return tbl
+
     def source_sink_per_fu_summary_table(self,region=None):
-      pass
+        DROP_ELEMENTS=[
+            'Residual Node Storage',
+            'Node Initial Load',
+            'Node Injected Mass',
+            'Node Yield',
+            'Extraction',
+            'DWC Contributed Seepage',
+            'TimeSeries Contributed Seepage',
+            'Leached'
+        ]
+
+        raw = self.raw_summary_table(region)
+        df = raw.copy()
+
+        headwater_catchments = [sc['properties']['name'] for sc in self.impl.network.headwater_catchments()]
+        df = df[(df.BudgetElement!='Link In Flow')|(df.ModelElement.isin(headwater_catchments))]
+
+        df.loc[df['FU'].isin(['Link','Node']),'FU']='Stream'
+        ss_by_fu = df.groupby(['FU','Constituent','BudgetElement']).sum(numeric_only=True).reset_index()
+        ss_by_fu = ss_by_fu[~ss_by_fu.Constituent.isin(self.impl.meta['pesticides'])]
+        ss_by_fu = ss_by_fu[ss_by_fu.Constituent!='Flow']
+        ss_by_fu = ss_by_fu[~ss_by_fu.BudgetElement.isin(DROP_ELEMENTS)]
+        ss_by_fu = self.augment_source_sink_fu_table(ss_by_fu)
+        return ss_by_fu
 
     def raw_summary_table(self,region=None):
       if self._raw_results_table is None:
