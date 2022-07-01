@@ -383,23 +383,26 @@ class DynamicSednetStandardReporting(object):
         tbl = pd.concat([tbl,pd.DataFrame(extra_rows)]).drop_duplicates(subset=columns,keep='first')
         return tbl
 
-    def source_sink_per_fu_summary_table(self,region=None):
+    def source_sink_per_fu_summary_table(self,region=None,include_extraction=False,inflow_headwaters_only=True):
         DROP_ELEMENTS=[
             'Residual Node Storage',
             'Node Initial Load',
             'Node Injected Mass',
             'Node Yield',
-            'Extraction',
             'DWC Contributed Seepage',
             'TimeSeries Contributed Seepage',
             'Leached'
         ]
 
+        if not include_extraction:
+          DROP_ELEMENTS.append('Extraction')
+
         raw = self.raw_summary_table(region)
         df = raw.copy()
 
-        headwater_catchments = [sc['properties']['name'] for sc in self.impl.network.headwater_catchments()]
-        df = df[(df.BudgetElement!='Link In Flow')|(df.ModelElement.isin(headwater_catchments))]
+        if inflow_headwaters_only:
+          headwater_catchments = [sc['properties']['name'] for sc in self.impl.network.headwater_catchments()]
+          df = df[(df.BudgetElement!='Link In Flow')|(df.ModelElement.isin(headwater_catchments))]
 
         df.loc[df['FU'].isin(['Link','Node']),'FU']='Stream'
         ss_by_fu = df.groupby(['FU','Constituent','BudgetElement']).sum(numeric_only=True).reset_index()
@@ -408,6 +411,11 @@ class DynamicSednetStandardReporting(object):
         ss_by_fu = ss_by_fu[~ss_by_fu.BudgetElement.isin(DROP_ELEMENTS)]
         ss_by_fu = self.augment_source_sink_fu_table(ss_by_fu)
         return ss_by_fu
+
+    def source_sink_summary_table(self,region=None):
+      ss_by_fu = self.source_sink_per_fu_summary_table(region,include_extraction=True,inflow_headwaters_only=False)
+      source_sink_summary = ss_by_fu.groupby(['Constituent','BudgetElement']).sum(numeric_only=True).reset_index()
+      return source_sink_summary
 
     def raw_summary_table(self,region=None):
       if self._raw_results_table is None:
