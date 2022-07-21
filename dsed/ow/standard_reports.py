@@ -262,6 +262,24 @@ class DynamicSednetStandardReporting(object):
                 summary.append((con,fu,tbl.loc[con,fu]))
         return pd.DataFrame(summary,columns=['Constituent','FU','Total_Load_in_Kg'])
 
+    def runoff_volume_table(self,component='Runoff'):
+        flow_ts = self.results.all_time_series('DepthToRate','outflow',component=component)
+        return (flow_ts*PER_SECOND_TO_PER_DAY*M3_TO_L).sum().reset_index().rename(columns={'catchment':'ModelElement','cgu':'FU',0:'Flow_Litres'})
+
+    def fu_rates_table(self):
+        area_table = self.fu_areas_table().rename(columns={'Catchment':'ModelElement','CGU':'FU','area':'Area'})
+        c_summary_table = self.catchment_summary_table()
+        c_summary_table = c_summary_table[c_summary_table.Process=='Supply']
+        c_summary_table = c_summary_table.groupby(['ModelElement','FU','Constituent']).sum().reset_index()
+
+        flow = self.runoff_volume_table()
+
+        merged = pd.merge(c_summary_table,area_table,on=['ModelElement','FU'],how='left')
+        merged = pd.merge(merged,flow,on=['ModelElement','FU'],how='left')
+        merged['LoadPerArea']=(merged['Total_Load_in_Kg']/merged['Area']).fillna(0.0)
+        merged['Concentration']=(merged['Total_Load_in_Kg']/merged['Flow_Litres']).fillna(0.0)
+        return merged
+
     def regional_summary_table(self):
         'Not implemented'
         tables = [self.mass_balance_summary_table(self,region) for region in self.impl.meta['regions']]
