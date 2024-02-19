@@ -7,6 +7,32 @@ import geopandas as gpd
 import pandas as pd
 import os
 
+UPSTREAM_FLUXES={
+    'LumpedConstituentRouting':'inflowLoad',
+    'ConstituentDecay':'inflowLoad',
+    'InstreamDissolvedNutrientDecay':'incomingMassUpstream',
+    'InstreamParticulateNutrient':'incomingMassUpstream',
+    'InstreamCoarseSediment':'upstreamMass',
+    'InstreamFineSediment':'upstreamMass'
+}
+
+DOWNSTREAM_FLUXES={
+    'LumpedConstituentRouting':'outflowLoad',
+    'ConstituentDecay':'outflowLoad',
+    'InstreamDissolvedNutrientDecay':'loadDownstream',
+    'InstreamParticulateNutrient':'loadDownstream',
+    'InstreamCoarseSediment':'loadDownstream',
+    'InstreamFineSediment':'loadDownstream',
+    'EmcDwc':'outflowLoad',
+    'Sum':'outflowLoad',
+    'SednetDissolvedNutrientGeneration':'totalLoad',
+    'SednetParticulateNutrientGeneration':'totalLoad',
+    'SednetDissolvedNutrientGeneration':'totalLoad',
+    'PassLoadIfFlow':'outputLoad',
+    'StorageParticulateTrapping':'outflowLoad',
+    'VariablePartition':'output2' # ??????
+}
+
 class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
     def __init__(self, fn, res_fn=None):
         self.fn = fn
@@ -152,6 +178,66 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
         assert len(catchments)==1
         catchment = catchments[0]
         return catchment['properties']['name']
+
+    def openwater_node(self,node,exact=False):
+        '''
+        Find the name of a matching node in the Openwater model if one and only one exists
+
+        If exact is False, the system will find a node with a name that matches the given node name.
+        If more than one node matches and exception will be raised.
+        If no nodes match, None will be returned.
+        '''
+        actual_nodes = self.results.dim('node_name')
+        if exact:
+            if node in actual_nodes:
+                return node
+            return None
+        matches = [n for n in actual_nodes if node in n]
+        if len(matches) == 0:
+            return None
+        if len(matches) > 1:
+            raise Exception('Multiple nodes matching %s'%node)
+        return matches[0]
+
+    def flux_tags_for_node(self,node,consistuent,exact_node_match=False):
+        '''
+        Find the flux tags for a given node.
+
+        Parameters:
+        * node - the name of the node
+        * exact - When false, the system will find a node with a name that matches the given node name.
+                  If more than one node matches and exception will be raised.
+
+        Notes:
+        * If there is more than one node downstream of the given node, an exception will be raised.
+
+        Returns:
+        * A tuple containing:
+          * A model name
+          * A flux (variable) name
+          * A dictionary of the tags to identify the model instance corresponding to the node
+        '''
+        tags = {}
+        tags['constituent'] = consistuent
+        ow_node = self.openwater_node(node,exact=exact_node_match)
+        if ow_node is None: # Match a catchment
+            catchment = self.catchment_for_node(node,exact=exact_node_match)
+            tags['catchment'] = catchment
+            transport_model,downstream_flux = self.transport_model(consistuent)
+            upstream_flux = UPSTREAM_FLUXES[transport_model]
+            if 'constituent' not in self.model.dims_for_model(transport_model):
+                tags.pop('constituent')
+            return transport_model,upstream_flux,tags
+
+        tags['node_name'] = ow_node
+        models = self.model.models_matching(**tags)
+        if len(models) == 0:
+            tags.pop('constituent')
+            models = self.model.models_matching(**tags)
+        assert len(models)==1
+        model = models[0]
+        flux = DOWNSTREAM_FLUXES[model]
+        return model,flux,tags
 
 def _ensure_uncompressed(fn):
     if os.path.exists(fn):
