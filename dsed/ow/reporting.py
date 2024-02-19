@@ -116,6 +116,43 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
             return 'InstreamFineSediment', 'loadDownstream'
         assert False
 
+    def catchment_for_node(self,node,exact=True):
+        '''
+        Find the catchment (and hence link) to use as a reporting proxy for a give node.
+
+        Catchment will be the catchment immediately downstream of the node in the original Source model.
+
+        Hence you would use upstream fluxes on the catchment transport model to get the equivalent fluxes from the node.
+
+        Parameters:
+        * node - the name of the node
+        * exact - When false, the system will find a node with a name that matches the given node name.
+                  If more than one node matches and exception will be raised.
+
+        Notes:
+        * If there is more than one node downstream of the given node, an exception will be raised.
+
+        Returns:
+        * The name of the catchment
+        '''
+        if exact:
+            node = self.network.by_name(node)
+        else:
+            nodes = self.network.match_name(f'.*{node}.*')
+            if len(nodes) == 0:
+                raise Exception('No nodes matching %s'%node)
+            if len(nodes) > 1:
+                raise Exception('Multiple nodes matching %s'%node)
+            node = nodes[0]
+
+        ds_links = self.network.downstream_links(node)
+        assert len(ds_links)==1
+        ds_link = ds_links[0]
+        catchments = self.network['features'].find_by_link(ds_link['properties']['id'])
+        assert len(catchments)==1
+        catchment = catchments[0]
+        return catchment['properties']['name']
+
 def _ensure_uncompressed(fn):
     if os.path.exists(fn):
         return
