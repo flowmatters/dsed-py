@@ -448,7 +448,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                                                         dim_columns=['catchment', 'cgu'])
             res.nested.append(gully_parameters)
 
-            ts_load_hillslope_fine = gully_params.pivot('catchment', 'cgu', 'HillSlopeFinePerc') / 100.0
+            ts_load_hillslope_fine = gully_params.pivot(index='catchment', columns='cgu', values='HillSlopeFinePerc') / 100.0
             hillslope_fine = ParameterTableAssignment(ts_load_hillslope_fine, node_types.FixedPartition,
                                                   parameter='fraction', column_dim='cgu', row_dim='catchment')
             res.nested.append(hillslope_fine)
@@ -469,7 +469,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
             res.nested.append(gully_inputs)
 
-        # ts_load_hillslope_fine = gully_params.pivot('catchment', 'cgu', 'HillSlopeFinePerc') / 100.0
+        # ts_load_hillslope_fine = gully_params.pivot(index='catchment', columns='cgu', values='HillSlopeFinePerc') / 100.0
         # hillslope_fine = ParameterTableAssignment(ts_load_hillslope_fine, node_types.FixedPartition,
         #                                           parameter='fraction', column_dim='cgu', row_dim='catchment')
         # res.nested.append(hillslope_fine)

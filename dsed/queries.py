@@ -30,12 +30,12 @@ class ResultsQueries(object):
 	def regional_export(self,units='t/y'):
 		full = self._results.get('RegionalSummaryTable')
 		exports = full[full.MassBalanceElement=='Export']
-		regionalLoads = exports.reset_index().pivot('Constituent','SummaryRegion','Total_Load_in_Kg')
+		regionalLoads = exports.reset_index().pivot(index='Constituent',columns='SummaryRegion',values='Total_Load_in_Kg')
 		return self.convert(regionalLoads,units)
 
 	def export_per_landuse_per_ha(self,load_units='t/y'):
 		fuData_kg = self._results.get('FUSummaryTable')
-		SupplyByFU_t = self.convert(fuData_kg.reset_index().pivot('Constituent','FU','Total_Load_in_Kg'),load_units)
+		SupplyByFU_t = self.convert(fuData_kg.reset_index().pivot(index='Constituent',columns='FU',values='Total_Load_in_Kg'),load_units)
 
 		FUAreas_ha = self._results.get('fuAreasTable').groupby('FU').sum() / 10000.0
 
@@ -44,7 +44,10 @@ class ResultsQueries(object):
 	def annual_mass_balance(self,units='standard'):
 		raw = self._results.get('RawResults')
 		grouped_rawResults = raw.reset_index().groupby(['Process', 'BudgetElement', 'Constituent']).sum()
-		mass_balance_kg = pd.pivot_table(grouped_rawResults.reset_index(),index = ['Process','BudgetElement'], columns = 'Constituent', values = 'Total_Load_in_Kg')
+		mass_balance_kg = pd.pivot_table(grouped_rawResults.reset_index(),
+																	   index = ['Process','BudgetElement'],
+																		 columns = 'Constituent',
+																		 values = 'Total_Load_in_Kg')
 
 		mass_balance_annual = self.convert(mass_balance_kg,units) / self._years
 
@@ -68,7 +71,7 @@ class ResultsQueries(object):
 		raw = self._results.get('RawResults')
 		linkYields = raw[raw.BudgetElement=='Link Yield']
 		relevantLinkYields = linkYields[linkYields.ModelElement.isin(monitoring_sites)]
-		loadsForComparison = relevantLinkYields.reset_index().pivot('ModelElement','Constituent','Total_Load_in_Kg')
+		loadsForComparison = relevantLinkYields.reset_index().pivot(index='ModelElement',columns='Constituent',values='Total_Load_in_Kg')
 		conversions = {'Sediment - Fine':1e-6,'Flow':1e-6,'N_DIN':1e-3,'N_DON':1e-3,
 			'N_Particulate':1e-3,'P_DOP':1e-3,'P_FRP':1e-3,'P_Particulate':1e-3}
 		for col in loadsForComparison.columns:
