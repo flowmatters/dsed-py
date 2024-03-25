@@ -63,6 +63,7 @@ class OpenwaterDynamicSednetModel(object):
 
   def run(self,results_fn,overwrite=False):  
     self.model.run(self.dates,results_fn,overwrite=overwrite)
+    return OpenwaterDynamicSednetResults(self.ow_model_fn,results_fn)
 
   def open_model(self):
     _ensure_uncompressed(self.ow_model_fn)
