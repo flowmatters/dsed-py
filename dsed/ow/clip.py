@@ -80,8 +80,8 @@ def clip(model, dest_fn, clip_to):
   with open(dest_fn.replace('.h5', '.meta.json'), 'w') as fp:
     json.dump(clip_ds_meta(model.meta, new_dims), fp, indent=2, default=str)
   catchments = model.catchments[model.catchments.name.isin(new_dims['catchment'])]
-  links = model.links[model.links.name.isin(new_dims['link_name'])|model.links.id.isin(catchments.link)]
-  nodes = model.nodes[model.nodes.name.isin(new_dims['node_name'])|model.nodes.id.isin(links.from_node)|model.nodes.id.isin(links.to_node)]
+  links = model.links[model.links.name.isin(new_dims.get('link_name',[]))|model.links.id.isin(catchments.link)]
+  nodes = model.nodes[model.nodes.name.isin(new_dims.get('node_name',[]))|model.nodes.id.isin(links.from_node)|model.nodes.id.isin(links.to_node)]
   catchments.to_file(dest_fn.replace('.h5', '.catchments.json'), driver='GeoJSON')
   links.to_file(dest_fn.replace('.h5', '.links.json'), driver='GeoJSON')
   nodes.to_file(dest_fn.replace('.h5', '.nodes.json'), driver='GeoJSON')
