@@ -88,12 +88,6 @@ MODEL_NAME_TRANSLATIONS = {
 #     # if pesticide
 #     return n.EmcDwc
 
-class Reach(object):
-    pass
-
-class HydrologicalResponseUnit(object):
-    pass
-
 class DynamicSednetCGU(object):
     def __init__(self,cropping_cgu=True,sediment_fallback_model=False,gully_cgu=False,hillslope_cgu=False,ts_load_with_dwc=None):
         self.cropping_cgu = cropping_cgu
@@ -304,13 +298,6 @@ class DynamicSednetCGU(object):
             template.define_output(gen_node,main_output_flux(model),'generatedLoad')
 
         return template
-
-class DynamicSednetAgCGU(DynamicSednetCGU):
-    pass
-    # def generation_model(self,constituent,catchment):
-    #     if constituent == FINE_SEDIMENT:
-    #         return n.USLEFineSedimentGeneration
-    #     return super(DynamicSednetAgCGU,self).generation_model(constituent)
 
 class NilCGU(DynamicSednetCGU):
     def generation_model(self,*args,**kwargs):
