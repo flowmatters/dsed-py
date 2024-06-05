@@ -29,27 +29,27 @@ def read(*parts):
         return f.read()
 
 setup(
-        name='dsed-py',
-        version=version,
-        description="Support for running dynamic sednet simulations",
-        packages=["dsed","dsed.testing","dsed.migrate","dsed.ow"],
-        long_description=read("README.md"),
-        classifiers=filter(None, classifiers.split("\n")),
-        keywords='hydrology scripting dynamic sednet',
-        author='Joel Rahman',
-        author_email='joel@flowmatters.com.au',
-        url='https://github.com/flowmatters/ds-py',
+        # name='dsed-py',
+        # version=version,
+        # description="Support for running dynamic sednet simulations",
+        # packages=["dsed","dsed.testing","dsed.migrate","dsed.ow"],
+        # long_description=read("README.md"),
+        # classifiers=filter(None, classifiers.split("\n")),
+        # keywords='hydrology scripting dynamic sednet',
+        # author='Joel Rahman',
+        # author_email='joel@flowmatters.com.au',
+        # url='https://github.com/flowmatters/ds-py',
         #download_url = "http://cheeseshop.python.org/packages/source/p/Puppy/Puppy-%s.tar.gz" % version,
-        license='ISC',
-        py_modules=['dsed_tools'],
-        include_package_data=True,
-        zip_safe=True,
-        test_suite = 'nose.collector',
-        install_requires=[
-            'numpy',
-            'pandas'
-        ],
-        extras_require={
-            'test': ['nose','junit-xml'],
-        },
+        # license='ISC',
+        # py_modules=['dsed_tools'],
+        # include_package_data=True,
+        # zip_safe=True,
+        # test_suite = 'nose.collector', # unsupported by pyproject.toml
+        # install_requires=[
+        #     'numpy',
+        #     'pandas'
+        # ],
+        # extras_require={
+        #     'test': ['nose','junit-xml'],
+        # },
 )
