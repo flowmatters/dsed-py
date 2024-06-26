@@ -62,7 +62,7 @@ class OpenwaterDynamicSednetModel(object):
 
     self.network = _extend_network(self.network)
 
-  def run(self,results_fn,overwrite=False):  
+  def run(self,results_fn,overwrite=False):
     self.model.run(self.dates,results_fn,overwrite=overwrite)
     return OpenwaterDynamicSednetResults(self.ow_model_fn,results_fn)
 
