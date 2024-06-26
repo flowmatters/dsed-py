@@ -310,7 +310,8 @@ class DynamicSednetCatchment(object):
                  particulate_nutrients=['PartN','PartP'],
                  pesticides=['Pesticide1'],
                  particulate_nutrient_cgus=None,
-                 ts_load_with_dwc=None):
+                 ts_load_with_dwc=None,
+                 template_customisations=None):
         self.hrus = ['HRU']
         self.cgus = ['CGU']
         self.cgu_hrus = {'CGU':'HRU'}
@@ -326,6 +327,7 @@ class DynamicSednetCatchment(object):
         self.sediment_fallback_cgu = None
         self.ts_load_with_dwc = ts_load_with_dwc
         self.climate_inputs = ['rainfall','pet']
+        self.template_customisations = template_customisations
 
         self.rr = n.Sacramento
         self.cg = defaultdict(lambda:n.EmcDwc,{})
@@ -560,6 +562,9 @@ class DynamicSednetCatchment(object):
             hrus[hru].nest(cgu_template)
 
         template.nest(self.get_link_template(**kwargs))
+
+        if self.template_customisations is not None:
+            self.template_customisations(template,**kwargs)
 
         return template
 

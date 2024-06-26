@@ -97,18 +97,37 @@ def build_ow_model(data_path, time_period=None,start=DEFAULT_START, end=DEFAULT_
                    link_renames=None,
                    replay_hydro=False,
                    existing=None,
-                   progress=logger.info):
+                   progress=logger.info,
+                   catchment_customisation=None):
     if time_period is not None:
       start = time_period[0]
       end = time_period[-1]
-    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end)
+    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end,catchment_customisation=catchment_customisation)
     return builder.build_ow_model(link_renames,progress=progress,existing_model=existing)
 
 class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurationProvider):
-    def __init__(self,data_path,replay_hydro=False,start=DEFAULT_START,end=DEFAULT_END):
+    def __init__(self,
+                 data_path,
+                 replay_hydro=False,
+                 start=DEFAULT_START,
+                 end=DEFAULT_END,
+                 catchment_customisation=None,
+                 network_customisation=None):
+        '''
+
+        :param data_path:
+        :param replay_hydro:
+        :param start:
+        :param end:
+        :param catchment_customisation:
+        :param network_customisation: Optional: function that accepts a network (Veneer network) and returns modified network
+                                      (eg for clipping out a subset of the model)
+        '''
         super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None,time_period=pd.date_range(start,end))
         self.data_path = data_path
         self.replay_hydro = replay_hydro
+        self.catchment_customisation = catchment_customisation
+        self.network_customisation = network_customisation
         global RR,ROUTING
         RR = node_types.Sacramento
         ROUTING = node_types.StorageRouting
@@ -224,7 +243,8 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                                                     particulate_nutrients=meta['particulate_nutrients'],
                                                     particulate_nutrient_cgus=meta['particulate_nutrient_cgus'],
                                                     pesticides=meta['pesticides'],
-                                                    ts_load_with_dwc=meta['ts_load'])  # pesticides)
+                                                    ts_load_with_dwc=meta['ts_load'],
+                                                    template_customisations=self.catchment_customisation)  # pesticides)
 
         fus = meta['fus']
         catchment_template.hrus = fus
@@ -682,11 +702,16 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                        progress=print):
         init_timer('Build')
         init_timer('Read structure data')
-        network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
+        network_v = self.network()
+        if self.network_customisation is not None:
+          network_v = self.network_customisation(network_v)
+        network = network_v.as_dataframe()
+        # network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
+
         # self._network = _extend_network(self._load_json('network'))
 
         if link_renames is None:
-            link_renames = map_link_name_mismatches(self.network())
+            link_renames = map_link_name_mismatches(network_v)
         # self.time_period = pd.date_range(start, end)
 
         cropping = self._load_time_series_csv('cropping')
@@ -745,7 +770,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         model._parameteriser = p
         progress('Model parameterisation established')
-        
+
         close_timer()
         close_timer()
         meta['warnings'] = self.warnings
@@ -775,9 +800,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             return g
 
         report_time('Build template')
-        catchment_template = self.build_catchment_template(meta)
+        self.catchment_template = self.build_catchment_template(meta)
         report_time('Build graph')
-        model = from_source.build_catchment_graph(catchment_template, network, progress=nop, custom_processing=setup_dates)
+        model = from_source.build_catchment_graph(self.catchment_template, network, progress=nop, custom_processing=setup_dates)
 
         return model
 
