@@ -1,3 +1,4 @@
+import logging
 import os
 import json
 
@@ -31,17 +32,18 @@ DS_EMC_GULLY_MODEL='Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model'
 DS_CROP_SED_MODEL='GBR_DynSed_Extension.Models.GBR_CropSed_Wrap_Model'
 EMC_DWC_MODELS=[SOURCE_EMC_MODEL,DS_EMC_GULLY_MODEL]
 GULLY_MODELS=[DS_EMC_GULLY_MODEL,DS_SEDIMENT_MODEL,DS_CROP_SED_MODEL]
+USLE_MODEL_TYPES = ['USLEFineSedimentGeneration','MUSLEFineSedimentGeneration','CoreUSLE']
+
 DS_AREAL_MODELS = [
     ('DepthToRate','area'),
     ('PassLoadIfFlow','scalingFactor'),
-    ('USLEFineSedimentGeneration','area'),
     ('DynamicSednetGully','Area'),
     ('DynamicSednetGullyAlt','Area'),
     ('SednetParticulateNutrientGeneration','area')
-]
+] + [(m,'area') for m in USLE_MODEL_TYPES ]
 
 CLIMATE_INPUTS = {
-    'rainfall':['USLEFineSedimentGeneration']
+    'rainfall':USLE_MODEL_TYPES[:2]+['MUSLEEventBasedRFactor']
 }
 
 def levels_required(table ,column ,criteria):
@@ -59,7 +61,7 @@ def simplify(table ,column ,criteria=['Constituent']):
 
 
 def compute_ts_sediment_delivery_ratios(df):
-    fine_sed_scaling = df['HillslopeFineSDR'] / 100.0  # df['LoadConversionFactor'] * 
+    fine_sed_scaling = df['HillslopeFineSDR'] / 100.0  # df['LoadConversionFactor'] *
     coarse_sed_scaling = df['HillslopeCoarseSDR'] / 100.0
 
     fine_df = df[['catchment', 'cgu']]
@@ -96,18 +98,37 @@ def build_ow_model(data_path, time_period=None,start=DEFAULT_START, end=DEFAULT_
                    link_renames=None,
                    replay_hydro=False,
                    existing=None,
-                   progress=logger.info):
+                   progress=logger.info,
+                   catchment_customisation=None):
     if time_period is not None:
       start = time_period[0]
       end = time_period[-1]
-    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end)
+    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end,catchment_customisation=catchment_customisation)
     return builder.build_ow_model(link_renames,progress=progress,existing_model=existing)
 
 class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurationProvider):
-    def __init__(self,data_path,replay_hydro=False,start=DEFAULT_START,end=DEFAULT_END):
+    def __init__(self,
+                 data_path,
+                 replay_hydro=False,
+                 start=DEFAULT_START,
+                 end=DEFAULT_END,
+                 catchment_customisation=None,
+                 network_customisation=None):
+        '''
+
+        :param data_path:
+        :param replay_hydro:
+        :param start:
+        :param end:
+        :param catchment_customisation:
+        :param network_customisation: Optional: function that accepts a network (Veneer network) and returns modified network
+                                      (eg for clipping out a subset of the model)
+        '''
         super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None,time_period=pd.date_range(start,end))
         self.data_path = data_path
         self.replay_hydro = replay_hydro
+        self.catchment_customisation = catchment_customisation
+        self.network_customisation = network_customisation
         global RR,ROUTING
         RR = node_types.Sacramento
         ROUTING = node_types.StorageRouting
@@ -122,7 +143,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             if not os.path.exists(fn):
                 return None
 
-        return pd.read_csv(fn, index_col=0, parse_dates=True)
+        return pd.read_csv(fn, index_col=0, parse_dates=True,date_format='%Y-%m-%d')
 
     # def _load_time_series_csv(self,f):
     #     df = self._load_csv(f)
@@ -223,7 +244,8 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                                                     particulate_nutrients=meta['particulate_nutrients'],
                                                     particulate_nutrient_cgus=meta['particulate_nutrient_cgus'],
                                                     pesticides=meta['pesticides'],
-                                                    ts_load_with_dwc=meta['ts_load'])  # pesticides)
+                                                    ts_load_with_dwc=meta['ts_load'],
+                                                    template_customisations=self.catchment_customisation)  # pesticides)
 
         fus = meta['fus']
         catchment_template.hrus = fus
@@ -384,9 +406,10 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
             fine_sediment_params = fine_sediment_params.rename(
                 columns={c: c.replace('_', '') for c in fine_sediment_params.columns})
-            usle_parameters = ParameterTableAssignment(fine_sediment_params, node_types.USLEFineSedimentGeneration,
-                                                    dim_columns=['catchment', 'cgu'])
-            res.nested.append(usle_parameters)
+            for mt in USLE_MODEL_TYPES:
+              usle_parameters = ParameterTableAssignment(fine_sediment_params, getattr(node_types,mt),
+                                                      dim_columns=['catchment', 'cgu'])
+              res.nested.append(usle_parameters)
 
             usle_timeseries_inputs = DataframeInputs()
             usle_timeseries_inputs.inputter(usle_timeseries, 'KLSC', 'KLSC_Total For ${catchment} ${cgu}')
@@ -681,11 +704,16 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                        progress=print):
         init_timer('Build')
         init_timer('Read structure data')
-        network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
+        network_v = self.network()
+        if self.network_customisation is not None:
+          network_v = self.network_customisation(network_v)
+        network = network_v.as_dataframe()
+        # network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
+
         # self._network = _extend_network(self._load_json('network'))
 
         if link_renames is None:
-            link_renames = map_link_name_mismatches(self.network())
+            link_renames = map_link_name_mismatches(network_v)
         # self.time_period = pd.date_range(start, end)
 
         cropping = self._load_time_series_csv('cropping')
@@ -744,7 +772,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         model._parameteriser = p
         progress('Model parameterisation established')
-        
+
         close_timer()
         close_timer()
         meta['warnings'] = self.warnings
@@ -762,21 +790,30 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             date_tpl.add_node(node_types.DateGenerator, **date_tags)
             g = templating.template_to_graph(g, date_tpl)
             date_node = [n for n in g.nodes if g.nodes[n][TAG_MODEL] == 'DateGenerator'][0]
-            usle_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] == 'USLEFineSedimentGeneration']
-            # progress('USLE Nodes:', len(usle_nodes))
-            for usle in usle_nodes:
-                g.add_edge(date_node, usle, src=['dayOfYear'], dest=['dayOfYear'])
 
-            gully_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] in ['DynamicSednetGullyAlt','DynamicSednetGully']]
-            for gully in gully_nodes:
-                g.add_edge(date_node, gully, src=['year'], dest=['year'])
+            for output_type in node_types.MODELS['DateGenerator']['Outputs']:
+              models_with_input = node_types.models_with_term(output_type,'Input')
+              for model_type in models_with_input:
+                nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] == model_type]
+                if len(nodes):
+                  logging.info('Linking %d %s nodes to date generator %s'%(len(nodes),model_type,output_type))
+                for node in nodes:
+                  g.add_edge(date_node, node, src=[output_type], dest=[output_type])
+
+            # usle_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] in USLE_MODEL_TYPES]
+            # for usle in usle_nodes:
+            #     g.add_edge(date_node, usle, src=['dayOfYear'], dest=['dayOfYear'])
+
+            # gully_nodes = [n for n in g.nodes if g.nodes[n][TAG_MODEL] in ['DynamicSednetGullyAlt','DynamicSednetGully']]
+            # for gully in gully_nodes:
+            #     g.add_edge(date_node, gully, src=['year'], dest=['year'])
 
             return g
 
         report_time('Build template')
-        catchment_template = self.build_catchment_template(meta)
+        self.catchment_template = self.build_catchment_template(meta)
         report_time('Build graph')
-        model = from_source.build_catchment_graph(catchment_template, network, progress=nop, custom_processing=setup_dates)
+        model = from_source.build_catchment_graph(self.catchment_template, network, progress=nop, custom_processing=setup_dates)
 
         return model
 

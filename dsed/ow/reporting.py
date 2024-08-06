@@ -7,6 +7,7 @@ import geopandas as gpd
 import pandas as pd
 import os
 import logging
+import shutil
 
 UPSTREAM_FLUXES={
     'LumpedConstituentRouting':'inflowLoad',
@@ -61,13 +62,21 @@ class OpenwaterDynamicSednetModel(object):
 
     self.network = _extend_network(self.network)
 
-  def run(self,results_fn,overwrite=False):  
+  def run(self,results_fn,overwrite=False):
     self.model.run(self.dates,results_fn,overwrite=overwrite)
     return OpenwaterDynamicSednetResults(self.ow_model_fn,results_fn)
 
   def open_model(self):
     _ensure_uncompressed(self.ow_model_fn)
     self.model = ModelFile(self.ow_model_fn)
+
+  def copy_to(self,dest_fn):
+    shutil.copyfile(self.ow_model_fn,dest_fn)
+    shutil.copyfile(self.filename_from_base('.meta.json'),dest_fn.replace('.h5','.meta.json'))
+    shutil.copyfile(self.filename_from_base('.nodes.json'),dest_fn.replace('.h5','.nodes.json'))
+    shutil.copyfile(self.filename_from_base('.links.json'),dest_fn.replace('.h5','.links.json'))
+    shutil.copyfile(self.filename_from_base('.catchments.json'),dest_fn.replace('.h5','.catchments.json'))
+    return OpenwaterDynamicSednetModel(dest_fn)
 
   def catchment_for_node(self,node,exact=True):
     '''
@@ -199,7 +208,7 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
 
     def generation_model(self,c,fu):
       return self.model.generation_model(c,fu)
-    
+
     def transport_model(self,c):
       return self.model.transport_model(c)
 
