@@ -1,1 +1,12 @@
+# required
+numpy
+pandas
+# optional:
 assertpy
+geopandas
+h5py
+networkx
+scipy
+psutil
+https://github.com/flowmatters/veneer-py/archive/master.zip
+https://github.com/flowmatters/openwater/archive/master.zip

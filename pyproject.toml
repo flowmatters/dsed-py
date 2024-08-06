@@ -9,7 +9,7 @@ keywords = ["hydrology", "scripting", "dynamic", "sednet"]
 license = {text = "ISC License"}
 version = "0.1"
 readme = {file = "README.md", content-type = "text/markdown"}
-dependencies = ["numpy", "pandas", "assertpy"]
+# dependencies = ["numpy", "pandas", "assertpy"]
 authors = [
     {name = "Joel Rahman", email = "joel@flowmatters.com.au"}
 ]
