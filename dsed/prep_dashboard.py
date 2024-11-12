@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import hydrograph as hg
 from string import Template
+from . import RunDetails
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +35,13 @@ TRANSFORMS={
 }
 
 def determine_num_years(results_dir:str):
-    ts_dir = os.path.join(results_dir,'TimeSeries')
-    first_timeseries = glob(os.path.join(ts_dir,'**','*.csv'))[0]
-    df = pd.read_csv(first_timeseries,index_col=0,parse_dates=True)
-    days = len(df)
-    return round(days/365.25)
+    run_info = RunDetails(results_dir)
+    return run_info.yearsOfRecording
 
 def map_run(param_fn:str,base_dir:str)->dict:
-    result = dict(model=param_fn.replace(base_dir,'')[:2],
-                  run=param_fn.replace(base_dir,'').split('/')[0],
+    rel_path = os.path.relpath(param_fn,base_dir)
+    result = dict(model=rel_path.replace(base_dir,'')[:2],
+                  run=rel_path.replace(base_dir,'').split('/')[0],
                   parameters=param_fn,
                   raw=param_fn.replace(PARAM_FN,RAW_FN),
                   areas=param_fn.replace(PARAM_FN,AREAS_FN),
@@ -54,11 +53,12 @@ def map_run(param_fn:str,base_dir:str)->dict:
         result['scenario'] = 'predev'
     else:
         result['scenario'] = 'unknown'
+    logging.info('Detected run %s:%s (%d years)',result['model'],result['scenario'],result['years'])
     return result
 
 def map_runs_in_directory(results_dir:str) -> list:
     pts = glob(os.path.join(results_dir,'**','ParameterTable.csv'),recursive=True)
-    base_dir = os.path.commonprefix(pts)
+    base_dir = os.path.commonpath(pts)
     param_map = [map_run(fn,base_dir) for fn in pts]
     return param_map
 
@@ -197,3 +197,4 @@ def host(dashboard_data_dir:str):
     host_process.terminate()
     host_process.wait()
     logger.info('Hosting stopped')
+
