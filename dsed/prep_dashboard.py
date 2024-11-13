@@ -58,7 +58,10 @@ def map_run(param_fn:str,base_dir:str)->dict:
 
 def map_runs_in_directory(results_dir:str) -> list:
     pts = glob(os.path.join(results_dir,'**','ParameterTable.csv'),recursive=True)
-    base_dir = os.path.commonpath(pts)
+    if len(pts)>1:
+      base_dir = os.path.commonpath(pts)
+    else:
+      base_dir = results_dir
     param_map = [map_run(fn,base_dir) for fn in pts]
     return param_map
 
@@ -78,6 +81,24 @@ def contains_matching_run(all_runs,run):
             return True
     return False
 
+def read_ragged_csv(fn):
+    logging.warning('Reading ragged CSV file %s',fn)
+    import csv
+
+    with open(fn,'r') as fp:
+      lines=list(csv.reader(fp))
+      header = lines[0]
+      extra_names = ['a','b','c']
+      tbl = pd.read_csv(fn,skiprows=1,names=header+extra_names)
+      tbl = tbl.drop(columns=extra_names)
+      return tbl
+
+def read_csv(fn):
+    try:
+        return pd.read_csv(fn)
+    except pd.errors.ParserError:
+        return read_ragged_csv(fn)
+
 def find_all_runs(source_data_directories:list)->list:
     all_runs = []
     for source_dir in source_data_directories:
@@ -96,7 +117,7 @@ def load_tables(runs):
         logger.info(f'Loading {table} for each run.')
         loaded = []
         for mod in runs:
-            tbl = pd.read_csv(mod[table])
+            tbl = read_csv(mod[table])
             tbl['REGION'] = mod['model']
             tbl['SCENARIO'] = mod['scenario']
             tbl.rename(columns=dict(ModelElement='CATCHMENT',FU='ELEMENT',ModelElementType='FEATURE_TYPE'),inplace=True)
@@ -144,7 +165,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
     fu_params = clear_rows_for_zero_area_fus(fu_params,fu_areas,'VALUE')
     parameters = pd.concat([fu_params,other_params])
 
-    parameters = parameters[~parameters.PARAMETER.isin(['USLEmodel','GULLYmodel'])]
+    parameters = parameters[~parameters.PARAMETER.isin(['USLEmodel','GULLYmodel','Hydropower','OutletManager'])]
     parameters.loc[parameters.ELEMENT.str.startswith('link for catchment'),'ELEMENT']='Link'
     parameters.loc[parameters.CATCHMENT==parameters.ELEMENT,'ELEMENT']='Node'
     parameters_without_model = parameters.drop(columns='MODEL')
