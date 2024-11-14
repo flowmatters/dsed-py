@@ -191,6 +191,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
         ds = open_hg(tbl)
         ds.rewrite(False)
         full_tbl = all_tables[tbl]
+        full_tbl = full_tbl.dropna()
         if len(grouping_keys):
             for grouping, subset in full_tbl.groupby(grouping_keys):
                 tags = dict(zip(grouping_keys,grouping))
