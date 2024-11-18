@@ -145,6 +145,43 @@ def add_key(df):
     df['key'] = df['REGION']+':'+df['CATCHMENT']
     return df
 
+def classify_results(raw,parameters,model_param_index):
+    logger.info('Classifying raw results')
+    emc_dwc_parameters = model_param_index[model_param_index.PARAMETER.str.contains('EMC')|model_param_index.PARAMETER.str.contains('Event Mean Concentration')]
+    # |model_param_index.PARAMETER.str.contains('DWC')|model_param_index.PARAMETER.str.contains('Dry Weather Concentration')]
+    emc_dwc_parameters = emc_dwc_parameters[~emc_dwc_parameters.PARAMETER.str.endswith('model')]
+    emc_dwc_models = set(emc_dwc_parameters.MODEL)
+    ts_parameters = model_param_index[model_param_index.PARAMETER.str.contains('TimeSeries')|model_param_index.MODEL.str.contains('TimeSeries')]
+    ts_models = set(ts_parameters.MODEL)
+
+    lhs = parameters[['REGION','SCENARIO','ELEMENT','CONSTITUENT','MODEL']].drop_duplicates()
+    raw = raw.rename(columns={'Constituent':'CONSTITUENT'})
+    raw['ELEMENT'] = raw['ELEMENT'].apply(lambda e: 'Link' if e=='Stream' else e)
+    raw = pd.merge(lhs,raw,on=['REGION','SCENARIO','ELEMENT','CONSTITUENT'],how='right')
+
+    sed_fine_rows = lhs[lhs.CONSTITUENT=='Sediment - Fine']
+    def match_sediment_model(row):
+        if row.CONSTITUENT != 'Sediment - Coarse':
+            return row.MODEL
+        if not pd.isnull(row.MODEL):
+            return row.MODEL
+        matching = (sed_fine_rows.REGION==row.REGION) & \
+                  (sed_fine_rows.SCENARIO==row.SCENARIO) & \
+                  (sed_fine_rows.ELEMENT==row.ELEMENT) & \
+                  (sed_fine_rows.CONSTITUENT=='Sediment - Fine')
+
+        rows = sed_fine_rows[matching]
+        if not len(rows):
+            return np.nan
+        return rows.iloc[0].MODEL
+    logger.info('Matching sediment models (Coarse to Fine)')
+    raw['MODEL'] = raw.apply(match_sediment_model,axis=1)
+    raw['is_emc_dwc'] = raw['MODEL'].apply(lambda m: m in emc_dwc_models)
+    raw['is_timeseries'] = raw['MODEL'].apply(lambda m: m in ts_models)
+    raw.loc[raw.BudgetElement=='Gully',['is_timeseries','is_emc_dwc']] = False
+    raw = raw.rename(columns=dict(CONSTITUENT='Constituent'))
+    return raw
+
 def prep(source_data_directories:list,dashboard_data_dir:str):
     def open_hg(lbl):
         path = os.path.join(dashboard_data_dir,lbl)
@@ -168,9 +205,15 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
     parameters = parameters[~parameters.PARAMETER.isin(['USLEmodel','GULLYmodel','Hydropower','OutletManager'])]
     parameters.loc[parameters.ELEMENT.str.startswith('link for catchment'),'ELEMENT']='Link'
     parameters.loc[parameters.CATCHMENT==parameters.ELEMENT,'ELEMENT']='Node'
+    parameters.loc[parameters.CONSTITUENT.isna(),'CONSTITUENT']='Flow'
     parameters_without_model = parameters.drop(columns='MODEL')
     parameters_without_model = add_key(parameters_without_model)
+    parameters_without_model = parameters_without_model.dropna()
     all_tables['parameters'] = parameters_without_model
+    all_tables['parameters_orig'] = parameters
+
+    model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
+    model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
 
     raw = all_tables['raw']
     fu_results, other_results = split_fu_and_stream(raw,fu_names)
@@ -181,17 +224,16 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
     fu_results = fu_results.drop(columns=['AREA','AREA_HA'])
     raw = pd.concat([fu_results,other_results])
     raw = add_key(raw)
+    raw = raw.dropna(subset=[RESULTS_VALUE_COLUMN])
+    raw = classify_results(raw,parameters,model_parameter_index)
     all_tables['raw'] = raw
-
-    model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
-    model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
 
     for tbl,grouping_keys in TABLES.items():
         logger.info(f'Creating dataset for {tbl}')
         ds = open_hg(tbl)
         ds.rewrite(False)
         full_tbl = all_tables[tbl]
-        full_tbl = full_tbl.dropna()
+        # full_tbl = full_tbl.dropna()
         if len(grouping_keys):
             for grouping, subset in full_tbl.groupby(grouping_keys):
                 tags = dict(zip(grouping_keys,grouping))
@@ -206,6 +248,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
     ds.add_table(model_parameter_index,role='model-parameter')
     ds.add_table(model_element_index,role='model-element')
     logger.info('Done')
+    # return all_tables
 
 def host(dashboard_data_dir:str):
     port = 8765
