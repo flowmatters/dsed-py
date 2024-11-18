@@ -179,6 +179,8 @@ def classify_results(raw,parameters,model_param_index):
     raw['is_emc_dwc'] = raw['MODEL'].apply(lambda m: m in emc_dwc_models)
     raw['is_timeseries'] = raw['MODEL'].apply(lambda m: m in ts_models)
     raw.loc[raw.BudgetElement=='Gully',['is_timeseries','is_emc_dwc']] = False
+    # raw.loc[(raw.BudgetElement=='')&(raw.MODEL=='Cropping Sediment (Sheet & Gully) - GBR'),'is_emc_dwc'] = True
+    raw.loc[(raw.BudgetElement=='Hillslope sub-surface soil')&(raw.MODEL=='Cropping Sediment (Sheet & Gully) - GBR'),'is_timeseries'] = False
     raw = raw.rename(columns=dict(CONSTITUENT='Constituent'))
     return raw
 
