@@ -142,7 +142,7 @@ def clear_rows_for_zero_area_fus(df,fu_areas,column,keep_area=False):
     return df
 
 def add_key(df):
-    df['key'] = df['REGION']+':'+df['CATCHMENT']
+    df['rcf'] = df['REGION']+'-'+df['CATCHMENT']+'-'+df['ELEMENT']
     return df
 
 def classify_results(raw,parameters,model_param_index):
