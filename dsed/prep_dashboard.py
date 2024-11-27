@@ -30,8 +30,52 @@ def add_per_year(df,row):
     df['kg_per_year'] = df[RESULTS_VALUE_COLUMN]/row['years']
     return df
 
+def compute_derived_parameters(params,*args):
+    logging.info('Computing derived parameters (Retreat Rate)')
+    BEMF='Bank Erosion Management Factor'
+    BEC='Bank Erosion Coefficent'
+    SLOPE='Link Slope'
+    BFD='Bank Full Flow'
+    RR='Retreat Rate'
+    SBD='Sediment Bulk Density'
+    BH='Bank Height'
+    LL='Link Length'
+    SE = 'Soil Erodibility'
+    RVP = 'Riparian Vegetation Percentage'
+    MRVE = 'Maximum Riparian Vegetation Effectiveness'
+
+    streambank_params = params[(params.ELEMENT!='Node')&params.PARAMETER.isin([BEMF,BEC,SLOPE,BFD,SBD,BH,LL,SE,RVP,MRVE])]
+
+    MABE='Mean Annual Bank Erosion'
+    MCF='Mass Conversion Factor'
+    BE='Bank Erodibility'
+    index_cols = set(streambank_params.columns)-{'PARAMETER','VALUE'}
+    streambank_params = streambank_params.pivot(index=index_cols,columns='PARAMETER',values='VALUE')
+    streambank_params = streambank_params.astype('f')
+    density_water = 1000.0 # kg.m^-3
+    gravity = 9.81        # m.s^-2
+
+    streambank_params[RR] = streambank_params[BEC] * \
+                            streambank_params[BEMF] * \
+                            streambank_params[BFD] * \
+                            streambank_params[SLOPE] * \
+                            density_water * \
+                            gravity
+    soil_erodibility = streambank_params[SE] * 0.01
+    riparian_efficacy = np.minimum(streambank_params[RVP],streambank_params[MRVE]) * 0.01
+    streambank_params[BE] = (1 - riparian_efficacy) * soil_erodibility
+    streambank_params[MCF] = streambank_params[SBD] * streambank_params[LL] * streambank_params[BH]
+    streambank_params[MABE] = streambank_params[RR] * streambank_params[BE] * streambank_params[MCF]
+
+    streambank_params = pd.melt(streambank_params,ignore_index=False,value_name='VALUE').reset_index()
+    computed_params = streambank_params[streambank_params.PARAMETER.isin([RR,BE,MABE])]
+
+    params = pd.concat([params,computed_params])
+    return params
+
 TRANSFORMS={
-    'raw':add_per_year
+    'raw':add_per_year,
+    'parameters':compute_derived_parameters
 }
 
 def determine_num_years(results_dir:str):
@@ -184,37 +228,6 @@ def classify_results(raw,parameters,model_param_index):
     raw.loc[(raw.BudgetElement=='Hillslope sub-surface soil')&(raw.MODEL=='Cropping Sediment (Sheet & Gully) - GBR'),'is_timeseries'] = False
     raw = raw.rename(columns=dict(CONSTITUENT='Constituent'))
     return raw
-
-def compute_derived_parameters(params):
-    logging.info('Computing derived parameters (Retreat Rate)')
-    BEMF='Bank Erosion Management Factor'
-    BEC='Bank Erosion Coefficent'
-    SLOPE='Link Slope'
-    BFD='Bank Full Flow'
-    RR='Retreat Rate'
-    # MABE='Mean Annual Bank Erosion'
-    # MCF='Mass Conversion Factor'
-    # BE='Bank Erodibility'
-    streambank_params = params[(params.ELEMENT!='Node')&params.PARAMETER.isin([BEMF,BEC,SLOPE,BFD])]
-    index_cols = set(streambank_params.columns)-{'PARAMETER','VALUE'}
-    streambank_params = streambank_params.pivot(index=index_cols,columns='PARAMETER',values='VALUE')
-    streambank_params = streambank_params.astype('f')
-    density_water = 1000.0 # kg.m^-3
-    gravity = 9.81        # m.s^-2
-
-    streambank_params[RR] = streambank_params[BEC] * \
-                            streambank_params[BEMF] * \
-                            streambank_params[BFD] * \
-                            streambank_params[SLOPE] * \
-                            density_water * \
-                            gravity
-
-    # streambank_params[MABE] = streambank_params[RR] * streambank_params[BE] * streambank_params[MCF]
-    streambank_params = pd.melt(streambank_params,ignore_index=False,value_name='VALUE').reset_index()
-    retreat_rate = streambank_params[streambank_params.PARAMETER==RR]
-
-    params = pd.concat([params,retreat_rate])
-    return params
 
 def prep(source_data_directories:list,dashboard_data_dir:str):
     def open_hg(lbl):
