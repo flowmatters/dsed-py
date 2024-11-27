@@ -143,6 +143,7 @@ def clear_rows_for_zero_area_fus(df,fu_areas,column,keep_area=False):
 
 def add_key(df):
     df['rcf'] = df['REGION']+'-'+df['CATCHMENT']+'-'+df['ELEMENT']
+    df['rc'] = df['REGION']+'-'+df['CATCHMENT']
     return df
 
 def classify_results(raw,parameters,model_param_index):
@@ -184,6 +185,37 @@ def classify_results(raw,parameters,model_param_index):
     raw = raw.rename(columns=dict(CONSTITUENT='Constituent'))
     return raw
 
+def compute_derived_parameters(params):
+    logging.info('Computing derived parameters (Retreat Rate)')
+    BEMF='Bank Erosion Management Factor'
+    BEC='Bank Erosion Coefficent'
+    SLOPE='Link Slope'
+    BFD='Bank Full Flow'
+    RR='Retreat Rate'
+    # MABE='Mean Annual Bank Erosion'
+    # MCF='Mass Conversion Factor'
+    # BE='Bank Erodibility'
+    streambank_params = params[(params.ELEMENT!='Node')&params.PARAMETER.isin([BEMF,BEC,SLOPE,BFD])]
+    index_cols = set(streambank_params.columns)-{'PARAMETER','VALUE'}
+    streambank_params = streambank_params.pivot(index=index_cols,columns='PARAMETER',values='VALUE')
+    streambank_params = streambank_params.astype('f')
+    density_water = 1000.0 # kg.m^-3
+    gravity = 9.81        # m.s^-2
+
+    streambank_params[RR] = streambank_params[BEC] * \
+                            streambank_params[BEMF] * \
+                            streambank_params[BFD] * \
+                            streambank_params[SLOPE] * \
+                            density_water * \
+                            gravity
+
+    # streambank_params[MABE] = streambank_params[RR] * streambank_params[BE] * streambank_params[MCF]
+    streambank_params = pd.melt(streambank_params,ignore_index=False,value_name='VALUE').reset_index()
+    retreat_rate = streambank_params[streambank_params.PARAMETER==RR]
+
+    params = pd.concat([params,retreat_rate])
+    return params
+
 def prep(source_data_directories:list,dashboard_data_dir:str):
     def open_hg(lbl):
         path = os.path.join(dashboard_data_dir,lbl)
@@ -200,6 +232,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
     all_tables['areas'] = fu_areas
 
     parameters = all_tables['parameters']
+    parameters = compute_derived_parameters(parameters)
     fu_params, other_params = split_fu_and_stream(parameters,fu_names)
     fu_params = clear_rows_for_zero_area_fus(fu_params,fu_areas,'VALUE')
     parameters = pd.concat([fu_params,other_params])
