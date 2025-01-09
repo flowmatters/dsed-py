@@ -37,6 +37,7 @@ def compute_derived_parameters(params,*args):
     SLOPE='Link Slope'
     BFD='Bank Full Flow'
     RR='Retreat Rate'
+    MRR='Modelled Retreat Rate'
     SBD='Sediment Bulk Density'
     BH='Bank Height'
     LL='Link Length'
@@ -65,10 +66,11 @@ def compute_derived_parameters(params,*args):
     riparian_efficacy = np.minimum(streambank_params[RVP],streambank_params[MRVE]) * 0.01
     streambank_params[BE] = (1 - riparian_efficacy) * soil_erodibility
     streambank_params[MCF] = streambank_params[SBD] * streambank_params[LL] * streambank_params[BH]
-    streambank_params[MABE] = streambank_params[RR] * streambank_params[BE] * streambank_params[MCF]
+    streambank_params[MRR] = streambank_params[RR] * streambank_params[BE]
+    streambank_params[MABE] = streambank_params[MRR] * streambank_params[MCF]
 
     streambank_params = pd.melt(streambank_params,ignore_index=False,value_name='VALUE').reset_index()
-    computed_params = streambank_params[streambank_params.PARAMETER.isin([RR,BE,MABE])]
+    computed_params = streambank_params[streambank_params.PARAMETER.isin([RR,BE,MABE,MRR,MCF])]
 
     params = pd.concat([params,computed_params])
     return params
