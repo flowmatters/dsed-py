@@ -247,7 +247,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
     all_tables['areas'] = fu_areas
 
     parameters = all_tables['parameters']
-    parameters = compute_derived_parameters(parameters)
+    # parameters = compute_derived_parameters(parameters)
     fu_params, other_params = split_fu_and_stream(parameters,fu_names)
     fu_params = clear_rows_for_zero_area_fus(fu_params,fu_areas,'VALUE')
     parameters = pd.concat([fu_params,other_params])
