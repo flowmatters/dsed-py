@@ -8,6 +8,7 @@ import numpy as np
 import hydrograph as hg
 from string import Template
 from . import RunDetails
+from .const import M_TO_KM
 
 logger = logging.getLogger(__name__)
 
@@ -272,10 +273,24 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
     for col in [RESULTS_VALUE_COLUMN,'kg_per_year']:
         fu_results[f'{col}_per_ha'] = fu_results[col]/fu_results['AREA_HA']
     fu_results = fu_results.drop(columns=['AREA','AREA_HA'])
-    raw = pd.concat([fu_results,other_results])
+
+    link_results = other_results[other_results.ELEMENT.isin(['Link','Stream'])]
+    other_results = other_results[~other_results.ELEMENT.isin(['Link','Stream'])]
+
+    link_length = parameters[parameters.PARAMETER=='Link Length'][['REGION','SCENARIO','CATCHMENT','VALUE']]
+    link_length = link_length.rename(columns=dict(VALUE='length'))
+    link_length['length'] = M_TO_KM * link_length['length'].astype('f')
+
+    link_results = pd.merge(link_results,link_length,on=['REGION','SCENARIO','CATCHMENT'],how='left')
+    link_results['kg_per_km'] = link_results[RESULTS_VALUE_COLUMN]/link_results['length']
+    link_results['kg_per_km_per_year'] = link_results['kg_per_year']/link_results['length']
+    link_results = link_results.drop(columns='length')
+
+    raw = pd.concat([fu_results,link_results,other_results])
     raw = add_key(raw)
     raw = raw.dropna(subset=[RESULTS_VALUE_COLUMN])
     raw = classify_results(raw,parameters,model_parameter_index)
+
     all_tables['raw'] = raw
 
     for tbl,grouping_keys in TABLES.items():
