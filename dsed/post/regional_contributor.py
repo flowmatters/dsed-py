@@ -72,7 +72,25 @@ def regional_contributor(network=None,reporting_regions=None,results_directory=N
     Parameters:
     - network: Source/Veneer Node link network. If None, provide v (Veneer client)
     - reporting_regions: GeoDataFrame of reporting regions using subcatchment polygons or dictionary lookup from subcatchment name to reporting region name
+    - results_directory: Directory containing the output of a Source dynamic sednet run (eg RawResults.csv etc). If None, provide raw, rsdr, climate and fu_areas as dataframes
+    - v: Veneer client. Required if network is None
+    - raw: DataFrame of raw results. Required if results_directory is None
+    - rsdr: DataFrame of RSDR values. Required if results_directory is None
+    - climate: DataFrame of climate (ie rainfall runoff) data. Required if results_directory is None
+    - fu_areas: DataFrame of functional unit areas. Required if results_directory is None
 
+    Returns:
+    - DataFrame of regional contributions, with columns:
+        - Rep_Region: Reporting region name
+        - ModelElement: The model element name
+        - Constituent: The constituent name
+        - FU: The functional unit name
+        - AreaM2: The area of the functional unit in square meters
+        - Process: The process name
+        - LoadToStream (kg): The load to the stream in kg
+        - LoadToRegExport (kg): The load to the regional export in kg
+        - RSDR: The regional delivery ratio
+        - Num_Days: The number of days in the simulation (not populated)
     '''
 
     if raw is None:
