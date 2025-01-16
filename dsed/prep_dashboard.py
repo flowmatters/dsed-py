@@ -164,6 +164,7 @@ def load_tables(runs):
         logger.info(f'Loading {table} for each run.')
         loaded = []
         for mod in runs:
+            logger.info(f'Loading %s for %s from %s',table,run_label(mod),mod[table])
             tbl = read_csv(mod[table])
             tbl['REGION'] = mod['model']
             tbl['SCENARIO'] = mod['scenario']
