@@ -1,6 +1,7 @@
 import logging
 from glob import glob
 import os
+import shutil
 import subprocess
 from time import sleep
 import pandas as pd
@@ -32,7 +33,7 @@ def add_per_year(df,row):
     return df
 
 def compute_derived_parameters(params,*args):
-    logging.info('Computing derived parameters (Retreat Rate)')
+    logger.info('Computing derived parameters (Retreat Rate)')
     BEMF='Bank Erosion Management Factor'
     BEC='Bank Erosion Coefficent'
     SLOPE='Link Slope'
@@ -100,7 +101,7 @@ def map_run(param_fn:str,base_dir:str)->dict:
         result['scenario'] = 'predev'
     else:
         result['scenario'] = 'unknown'
-    logging.info('Detected run %s:%s (%d years)',result['model'],result['scenario'],result['years'])
+    logger.info('Detected run %s:%s (%d years)',result['model'],result['scenario'],result['years'])
     return result
 
 def map_runs_in_directory(results_dir:str) -> list:
@@ -129,7 +130,7 @@ def contains_matching_run(all_runs,run):
     return False
 
 def read_ragged_csv(fn):
-    logging.warning('Reading ragged CSV file %s',fn)
+    logger.warning('Reading ragged CSV file %s',fn)
     import csv
 
     with open(fn,'r') as fp:
@@ -140,11 +141,28 @@ def read_ragged_csv(fn):
       tbl = tbl.drop(columns=extra_names)
       return tbl
 
-def read_csv(fn):
+def cache_filename(fn,data_cache):
+    return os.path.abspath(os.path.join(data_cache,fn.replace('\\\\','_').replace(':','_')))
+
+def cache_hit(cache_fn,source_fn):
+    if not os.path.exists(cache_fn):
+        return False
+    cache_mtime = os.path.getmtime(cache_fn)
+    source_mtime = os.path.getmtime(source_fn)
+    hit = cache_mtime > source_mtime
+    return hit
+
+def read_csv(fn,data_cache):
+    cache_fn = cache_filename(fn,data_cache)
+    if not cache_hit(cache_fn,fn):
+        logger.info('Caching %s to %s',fn,cache_fn)
+        os.makedirs(os.path.dirname(cache_fn),exist_ok=True)
+        shutil.copy(fn,cache_fn)
+
     try:
-        return pd.read_csv(fn)
+        return pd.read_csv(cache_fn)
     except pd.errors.ParserError:
-        return read_ragged_csv(fn)
+        return read_ragged_csv(cache_fn)
 
 def find_all_runs(source_data_directories:list)->list:
     all_runs = []
@@ -154,18 +172,18 @@ def find_all_runs(source_data_directories:list)->list:
             if contains_matching_run(all_runs,run):
                 logger.warning('Equivalent to run %s already in list',run_label(run))
                 continue
-            logging.info('Using run %s from %s',run_label(run),source_dir)
+            logger.info('Using run %s from %s',run_label(run),source_dir)
             all_runs.append(run)
     return all_runs
 
-def load_tables(runs):
+def load_tables(runs,data_cache):
     res = {}
     for table in TABLES.keys():
         logger.info(f'Loading {table} for each run.')
         loaded = []
         for mod in runs:
             logger.info(f'Loading %s for %s from %s',table,run_label(mod),mod[table])
-            tbl = read_csv(mod[table])
+            tbl = read_csv(mod[table],data_cache)
             tbl['REGION'] = mod['model']
             tbl['SCENARIO'] = mod['scenario']
             tbl.rename(columns=dict(ModelElement='CATCHMENT',FU='ELEMENT',ModelElementType='FEATURE_TYPE'),inplace=True)
@@ -233,7 +251,10 @@ def classify_results(raw,parameters,model_param_index):
     raw = raw.rename(columns=dict(CONSTITUENT='Constituent'))
     return raw
 
-def prep(source_data_directories:list,dashboard_data_dir:str):
+def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None):
+    if data_cache is None:
+        data_cache = os.path.abspath('./results-data-cache')
+
     def open_hg(lbl):
         path = os.path.join(dashboard_data_dir,lbl)
         logger.info(f'Opening dataset for %s at %s',lbl,path)
@@ -241,13 +262,14 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
 
     runs = find_all_runs(source_data_directories)
     logger.info('Got %d runs',len(runs))
-    all_tables = load_tables(runs)
+    all_tables = load_tables(runs,data_cache)
 
     fu_areas = all_tables['areas']
     fu_areas = fu_areas.rename(columns=dict(Catchment='CATCHMENT',FU='ELEMENT',Area='AREA'))
     fu_names=set(fu_areas.ELEMENT)
     all_tables['areas'] = fu_areas
 
+    logger.info('Processing parameters')
     parameters = all_tables['parameters']
     # parameters = compute_derived_parameters(parameters)
     fu_params, other_params = split_fu_and_stream(parameters,fu_names)
@@ -267,6 +289,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str):
     model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
     model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
 
+    logger.info('Processing raw results')
     raw = all_tables['raw']
     fu_results, other_results = split_fu_and_stream(raw,fu_names)
     fu_results = clear_rows_for_zero_area_fus(fu_results,fu_areas,[RESULTS_VALUE_COLUMN,'kg_per_year'],keep_area=True)
