@@ -22,7 +22,7 @@ def map_reporting_regions(network,node,lookup,existing_regions=None):
     reporting_region = None
     upstream_links = network.upstream_links(node)
     for l in upstream_links:
-        l_id = l['properties']['id']
+        l_id = l['properties'].get('id',l.get('id'))
         catchments = network['features'].find_by_link(l_id)
         assert len(catchments)==1,f'Expected 1 catchment, got {len(catchments)}'
         if reporting_region is not None:
