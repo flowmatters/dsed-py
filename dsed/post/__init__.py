@@ -14,6 +14,15 @@ def merge_feature_lookup(dest,source):
     for r, features in source.items():
         dest[r] = dest.get(r,set()).union(features)
 
+def f_id(f):
+    return f['properties'].get('id',f.get('id'))
+
+def catchment_for_link(network,link):
+    l_id = f_id(link)
+    catchments = network['features'].find_by_link(l_id)
+    assert len(catchments)==1,f'Expected 1 catchment, got {len(catchments)}'
+    return catchments[0]
+
 def map_reporting_regions(network,node,lookup,existing_regions=None):
     result = {}
     if existing_regions is None:
@@ -22,15 +31,13 @@ def map_reporting_regions(network,node,lookup,existing_regions=None):
     reporting_region = None
     upstream_links = network.upstream_links(node)
     for l in upstream_links:
-        l_id = l['properties'].get('id',l.get('id'))
-        catchments = network['features'].find_by_link(l_id)
-        assert len(catchments)==1,f'Expected 1 catchment, got {len(catchments)}'
+        catchment = catchment_for_link(network,l)
         if reporting_region is not None:
-            assert reporting_region == lookup[catchments[0]['properties']['name']]
-        reporting_region = lookup[catchments[0]['properties']['name']]
+            assert reporting_region == lookup[catchment['properties']['name']]
+        reporting_region = lookup[catchment['properties']['name']]
         existing_regions = existing_regions.union({reporting_region})
         next_node = network.by_id(l['properties']['from_node'])
-        feature_names = set([f['properties']['name'] for f in [catchments[0],l,node,next_node]])
+        feature_names = set([f['properties']['name'] for f in [catchment,l,node,next_node]])
         for r in existing_regions:
             result[r] = result.get(r,set()).union(feature_names)
 
@@ -42,9 +49,8 @@ def subset_network(network,feature_names):
     return network.subset(lambda f:f['properties']['name'] in feature_names)
 
 def accumulate_rsdr(result,link,network,rsdrs,downstream_rsdr):
-    catchments = network['features'].find_by_link(link['properties']['id'])
-    assert len(catchments)==1
-    catchment_name = catchments[0]['properties']['name']
+    catchment = catchment_for_link(network,link)
+    catchment_name = catchment['properties']['name']
     local_rsdrs = rsdrs[rsdrs.ModelElement==catchment_name]
     assert len(local_rsdrs)==1,f'Expected 1 RSDR matching {catchment_name}. Had {len(local_rsdrs)}'
 
