@@ -16,17 +16,15 @@ logger = logging.getLogger(__name__)
 PARAM_FN='ParameterTable.csv'
 RAW_FN='RawResults.csv'
 RESULTS_VALUE_COLUMN='Total_Load_in_Kg'
+RUN_METADATA_FN='DSScenarioRunInfo.xml'
 
 AREAS_FN='fuAreasTable.csv'
-FILES=[
-    PARAM_FN,
-    RAW_FN,
-    AREAS_FN
-]
+
 TABLES={
     'parameters':['CONSTITUENT','PARAMETER'],
     'raw':['Constituent','Process','BudgetElement'],
-    'areas':[]
+    'areas':[],
+    'run_metadata':[]
 }
 def add_per_year(df,row):
     df['kg_per_year'] = df[RESULTS_VALUE_COLUMN]/row['years']
@@ -93,7 +91,8 @@ def map_run(param_fn:str,base_dir:str)->dict:
                   parameters=param_fn,
                   raw=param_fn.replace(PARAM_FN,RAW_FN),
                   areas=param_fn.replace(PARAM_FN,AREAS_FN),
-                  years=determine_num_years(os.path.dirname(param_fn)))
+                  years=determine_num_years(os.path.dirname(param_fn)),
+                  run_metadata=os.path.join(os.path.dirname(param_fn),RUN_METADATA_FN))
     name = result['run'].upper()
     if ('BASE' in name) or ('BL' in name):
         result['scenario'] = 'baseline'
@@ -152,12 +151,25 @@ def cache_hit(cache_fn,source_fn):
     hit = cache_mtime > source_mtime
     return hit
 
-def read_csv(fn,data_cache):
+def ensure_cache(fn,data_cache):
     cache_fn = cache_filename(fn,data_cache)
     if not cache_hit(cache_fn,fn):
         logger.info('Caching %s to %s',fn,cache_fn)
         os.makedirs(os.path.dirname(cache_fn),exist_ok=True)
         shutil.copy(fn,cache_fn)
+    return cache_fn
+
+def read_xml(fn,data_cache):
+    cache_fn = ensure_cache(fn,data_cache)
+    # Read the xml and create a single row dataframe using the elements under the root element as columns
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(cache_fn)
+    root = tree.getroot()
+    data = {child.tag:child.text for child in root}
+    return pd.DataFrame([data])
+
+def read_csv(fn,data_cache):
+    cache_fn = ensure_cache(fn,data_cache)
 
     try:
         return pd.read_csv(cache_fn)
@@ -183,7 +195,11 @@ def load_tables(runs,data_cache):
         loaded = []
         for mod in runs:
             logger.info(f'Loading %s for %s from %s',table,run_label(mod),mod[table])
-            tbl = read_csv(mod[table],data_cache)
+            fn = mod[table]
+            if fn.endswith('.xml'):
+                tbl = read_xml(fn,data_cache)
+            else:
+                tbl = read_csv(fn,data_cache)
             tbl['REGION'] = mod['model']
             tbl['SCENARIO'] = mod['scenario']
             tbl.rename(columns=dict(ModelElement='CATCHMENT',FU='ELEMENT',ModelElementType='FEATURE_TYPE'),inplace=True)
