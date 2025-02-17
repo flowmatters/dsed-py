@@ -10,6 +10,8 @@ import hydrograph as hg
 from string import Template
 from . import RunDetails
 from .const import M_TO_KM
+import dask.dataframe as dd
+import dask
 
 logger = logging.getLogger(__name__)
 
@@ -258,26 +260,21 @@ def classify_results(raw,parameters,model_param_index):
             return np.nan
         return rows.iloc[0].MODEL
     logger.info('Matching sediment models (Coarse to Fine)')
-    raw['MODEL'] = raw.apply(match_sediment_model,axis=1)
+
+    dask_raw = dd.from_pandas(raw,npartitions=20)
+    logger.info('Got partitioned raw data')
+    raw['MODEL'] = dask_raw.map_partitions(lambda df:df.apply(match_sediment_model,axis=1),meta=pd.Series(dtype='str')).compute(scheduler='processes')
+    logger.info('Matched sediment models')
     raw['is_emc_dwc'] = raw['MODEL'].apply(lambda m: m in emc_dwc_models)
     raw['is_timeseries'] = raw['MODEL'].apply(lambda m: m in ts_models)
+    logger.info('Mapped emc and ts properties')
     raw.loc[raw.BudgetElement=='Gully',['is_timeseries','is_emc_dwc']] = False
     # raw.loc[(raw.BudgetElement=='')&(raw.MODEL=='Cropping Sediment (Sheet & Gully) - GBR'),'is_emc_dwc'] = True
     raw.loc[(raw.BudgetElement=='Hillslope sub-surface soil')&(raw.MODEL=='Cropping Sediment (Sheet & Gully) - GBR'),'is_timeseries'] = False
     raw = raw.rename(columns=dict(CONSTITUENT='Constituent'))
     return raw
 
-def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None):
-    if data_cache is None:
-        data_cache = os.path.abspath('./results-data-cache')
-
-    def open_hg(lbl):
-        path = os.path.join(dashboard_data_dir,lbl)
-        logger.info(f'Opening dataset for %s at %s',lbl,path)
-        return hg.open_dataset(path,'w')
-
-    runs = find_all_runs(source_data_directories)
-    logger.info('Got %d runs',len(runs))
+def proces_run_data(runs,data_cache):
     all_tables = load_tables(runs,data_cache)
 
     fu_areas = all_tables['areas']
@@ -303,7 +300,6 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     all_tables['parameters_orig'] = parameters
 
     model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
-    model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
 
     logger.info('Processing raw results')
     raw = all_tables['raw']
@@ -330,8 +326,39 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     raw = add_key(raw)
     raw = raw.dropna(subset=[RESULTS_VALUE_COLUMN])
     raw = classify_results(raw,parameters,model_parameter_index)
+    # raw = compute_generated_loads(raw,parameters)
 
     all_tables['raw'] = raw
+    return all_tables
+
+def concat_all_tables(all_tables):
+    result = {}
+    for k in all_tables[0].keys():
+        result[k] = pd.concat([tbl[k] for tbl in all_tables])
+    return result
+
+def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None):
+    if data_cache is None:
+        data_cache = os.path.abspath('./results-data-cache')
+
+    def open_hg(lbl):
+        path = os.path.join(dashboard_data_dir,lbl)
+        logger.info(f'Opening dataset for %s at %s',lbl,path)
+        return hg.open_dataset(path,'w')
+
+    runs = find_all_runs(source_data_directories)
+    logger.info('Got %d runs',len(runs))
+    all_tables = []
+    for run in runs:
+        logger.info('Run %s',run_label(run))
+        all_tables.append(dask.delayed(proces_run_data)([run],data_cache))
+    all_tables = dask.compute(*all_tables)
+    logger.info('Combining all tables')
+    all_tables = concat_all_tables(all_tables)
+
+    parameters = all_tables['parameters_orig']
+    model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
+    model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
 
     for tbl,grouping_keys in TABLES.items():
         logger.info(f'Creating dataset for {tbl}')
