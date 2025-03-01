@@ -46,7 +46,9 @@ def map_reporting_regions(network,node,lookup,existing_regions=None):
     return result
 
 def subset_network(network,feature_names):
-    return network.subset(lambda f:f['properties']['name'] in feature_names)
+    result = network.subset(lambda f:f['properties']['name'] in feature_names)
+    result.build_lookups()
+    return result
 
 def accumulate_rsdr(result,link,network,rsdrs,downstream_rsdr):
     catchment = catchment_for_link(network,link)
@@ -110,6 +112,7 @@ def regional_contributor(network=None,reporting_regions=None,results_directory=N
 
     if network is None:
         network = v.network()
+    network.build_lookups()
 
     raw = apply_catchment_names_for_upstream_nodes(raw,network)
     raw['BudgetElement'] = raw['BudgetElement'].replace({'Node Injected Inflow':'Node Injected Mass','Rainfall':'Storage Rainfall'})
