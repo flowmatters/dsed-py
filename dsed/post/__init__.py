@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import os
+import logging
+logger = logging.getLogger(__name__)
 
 def apply_catchment_names_for_upstream_nodes(results,network):
     results = results.copy()
@@ -120,7 +122,7 @@ def regional_contributor(network=None,reporting_regions=None,results_directory=N
     catchment_supply_rows = raw[(raw.ModelElementType=='Catchment')&(raw.Process=='Supply')]
 
     system_supply_types = {'Node Injected Mass', 'Node Initial Load', 'Link Initial Load', 'Storage Rainfall'}
-    system_supply = raw[raw.BudgetElement.isin(system_supply_types)]
+    system_supply = raw[raw.BudgetElement.isin(system_supply_types)].copy()
     system_supply['FU']='System Supply'
 
     climate['Element'] = climate['Element'].replace({'Runoff (QuickFlow)':'Quickflow','Baseflow':'Slowflow'})
@@ -146,7 +148,7 @@ def regional_contributor(network=None,reporting_regions=None,results_directory=N
     regional_rsdrs = {} # Lookup from region name to series/dictionary from link name to rsdr
     for region,features in reporting_region_features.items():
         network_subset = subset_network(network,features)
-        print(f'Processing {region}')
+        logger.info('Processing %s',region)
         for c in constituents:
             rsdr_subset = rsdr[rsdr.Constituent==c]
             regional_rsdrs[(region,c)] = build_rsdr_lookup(network_subset,rsdr_subset)
@@ -156,7 +158,7 @@ def regional_contributor(network=None,reporting_regions=None,results_directory=N
     COLUMNS=set(COLUMN_ORDER)
 
     region_results = []
-    print('Running for %d regions/constituents'%len(regional_rsdrs))
+    logger.info('Running for %d regions/constituents',len(regional_rsdrs))
     for (reg, constituent), rsdrs in regional_rsdrs.items():
         joined = pd.merge(all_supply[all_supply.Constituent==constituent],pd.Series(rsdrs,name='RSDR'),how='inner',left_on='ModelElement',right_index=True)
         joined = pd.merge(joined,fu_areas,how='left',left_on=['ModelElement','FU'],right_on=['Catchment','FU'])
@@ -179,3 +181,12 @@ def regional_contributor(network=None,reporting_regions=None,results_directory=N
     result = pd.concat(region_results)
     return result
 
+def run_regional_contributor(region,network_fn,reporting_regions_fn,run_dir):
+    import veneer
+    import geopandas as gpd
+    network = veneer.load_network(network_fn)
+    reporting_regions = gpd.read_file(reporting_regions_fn)
+    reporting_regions = reporting_regions[reporting_regions.Region==region].copy()
+    reporting_regions = reporting_regions.rename(columns={'Manag_U_48':'RepReg','SUBCAT':'Catchmt'})
+
+    return regional_contributor(network,reporting_regions,run_dir)
