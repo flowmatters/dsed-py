@@ -10,6 +10,7 @@ import hydrograph as hg
 from string import Template
 from . import RunDetails
 from .const import M_TO_KM, PERCENT_TO_FRACTION
+from .post import run_regional_contributor
 import dask.dataframe as dd
 import dask
 
@@ -424,7 +425,7 @@ def classify_results(raw,parameters,model_param_index):
 
     dask_raw = dd.from_pandas(raw,npartitions=20)
     logger.info('Got partitioned raw data')
-    raw['MODEL'] = dask_raw.map_partitions(lambda df:df.apply(match_sediment_model,axis=1),meta=pd.Series(dtype='str')).compute(scheduler='processes')
+    raw['MODEL'] = dask_raw.map_partitions(lambda df:df.apply(match_sediment_model,axis=1),meta=pd.Series(dtype='str')).compute()
     logger.info('Matched sediment models')
     raw['is_emc_dwc'] = raw['MODEL'].apply(lambda m: m in emc_dwc_models)
     raw['is_timeseries'] = raw['MODEL'].apply(lambda m: m in ts_models)
@@ -498,7 +499,64 @@ def concat_all_tables(all_tables):
         result[k] = pd.concat([tbl[k] for tbl in all_tables])
     return result
 
-def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None):
+def build_rsdr_dataset(runs:list,network_data_dir:str,reporting_regions:str):
+    jobs = []
+    regional_contributor_ = dask.delayed(run_regional_contributor)
+    for run in runs:
+        region = run['model']
+        logger.info('Preparing regional contributor for %s (%s)',region,run['scenario'])
+        network_fn = glob(os.path.join(network_data_dir,f'{region}*network.json'))[0]
+        run_dir = os.path.dirname(run['parameters'])
+        jobs.append(regional_contributor_(run['model'],network_fn,reporting_regions,run_dir))
+    logger.info('Running %d RSDR jobs',len(jobs))
+    job_results = dask.compute(*jobs)
+    logger.info('Got %d RSDR results',len(job_results))
+
+    for run, results in zip(runs,job_results):
+        for key in ['scenario','model']:
+            results[key] = run[key]
+    all_results = pd.concat(job_results)
+    all_results['rc'] = all_results['model'] + '-' + all_results['ModelElement']
+
+    subcatchment_results = all_results.groupby(
+        ['rc','Constituent','Rep_Region','scenario']).first().reset_index()
+    subcatchment_pivot = subcatchment_results.pivot(
+        columns='Constituent',
+        index=['rc','Rep_Region','scenario'],
+        values='RSDR').reset_index()
+
+    ds = hg.open_dataset('rsdr',mode='w')
+    for scenario in set(all_results.scenario):
+        subset = subcatchment_pivot[subcatchment_pivot.scenario==scenario]
+        for col in set(all_results.Constituent):
+            logger.info('Storing RSDR results for %s/%s',scenario,col)
+            columns = ['rc','Rep_Region','scenario',col]
+            for keep, rr in [('last','local'),('first','final')]:
+                table = subset.sort_values(col,ascending=True).drop_duplicates(
+                    subset=['rc'],keep=keep)[columns]
+                table = table.rename(columns={col:'rsdr'})
+                ds.add_table(table,constituent=col,reporting_region=rr,scenario=scenario)
+
+def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None,
+         network_data_dir:str=None,reporting_regions:str=None):
+    '''
+    Prepares the dashboard data for the given source data directories
+
+    source_data_directories: list of str
+        List of directories containing the source data
+    dashboard_data_dir: str
+        Directory to store the dashboard data
+    data_cache: str
+        Directory to store the data cache
+    network_data_dir: str
+        Directory containing the node link networks in Veneer GeoJSON format
+    reporting_regions: str
+        Shapefile/GeoJSON containing the reporting regions (subcatchments with attributes for RepReg)
+
+    Notes:
+    * Processes RSDRs if network_data_dir and reporting_regions are provided
+    '''
+
     if data_cache is None:
         data_cache = os.path.abspath('./results-data-cache')
 
@@ -509,6 +567,11 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
 
     runs = find_all_runs(source_data_directories)
     logger.info('Got %d runs',len(runs))
+
+    if network_data_dir and reporting_regions:
+        logger.info('Processing RSDRs')
+        build_rsdr_dataset(runs,network_data_dir,reporting_regions)
+
     all_tables = []
     for run in runs:
         logger.info('Run %s',run_label(run))
