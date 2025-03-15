@@ -20,30 +20,37 @@ def f_id(f):
     return f['properties'].get('id',f.get('id'))
 
 def catchment_for_link(network,link):
-    l_id = f_id(link)
-    catchments = network['features'].find_by_link(l_id)
-    assert len(catchments)==1,f'Expected 1 catchment, got {len(catchments)}'
-    return catchments[0]
+    return network.catchment_for_link(link)
+    # l_id = f_id(link)
+    # catchments = network['features'].find_by_link(l_id)
+    # assert len(catchments)==1,f'Expected 1 catchment, got {len(catchments)}'
+    # return catchments[0]
 
 def map_reporting_regions(network,node,lookup,existing_regions=None):
+    '''
+
+    Returns a dictionary from reporting region name to a set of feature names
+    that are in that reporting region, upstream of the given node
+    '''
     result = {}
     if existing_regions is None:
         existing_regions = set()
 
-    reporting_region = None
+    # reporting_region = None
     upstream_links = network.upstream_links(node)
     for l in upstream_links:
         catchment = catchment_for_link(network,l)
-        if reporting_region is not None:
-            assert reporting_region == lookup[catchment['properties']['name']]
+        # if reporting_region is not None:
+        #     assert reporting_region == lookup[catchment['properties']['name']], \
+        #       f'Inconsistent reporting regions for {catchment["properties"]["name"]}: {reporting_region} and {lookup[catchment["properties"]["name"]]}'
         reporting_region = lookup[catchment['properties']['name']]
-        existing_regions = existing_regions.union({reporting_region})
+        nested_region = existing_regions.union({reporting_region})
         next_node = network.by_id(l['properties']['from_node'])
         feature_names = set([f['properties']['name'] for f in [catchment,l,node,next_node]])
-        for r in existing_regions:
+        for r in nested_region:
             result[r] = result.get(r,set()).union(feature_names)
 
-        nested = map_reporting_regions(network,next_node,lookup,existing_regions)
+        nested = map_reporting_regions(network,next_node,lookup,nested_region)
         merge_feature_lookup(result,nested)
     return result
 
