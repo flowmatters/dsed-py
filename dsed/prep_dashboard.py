@@ -499,7 +499,7 @@ def concat_all_tables(all_tables):
         result[k] = pd.concat([tbl[k] for tbl in all_tables])
     return result
 
-def build_rsdr_dataset(runs:list,network_data_dir:str,reporting_regions:str):
+def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,reporting_regions:str):
     jobs = []
     regional_contributor_ = dask.delayed(run_regional_contributor)
     for run in runs:
@@ -525,7 +525,7 @@ def build_rsdr_dataset(runs:list,network_data_dir:str,reporting_regions:str):
         index=['rc','Rep_Region','scenario'],
         values='RSDR').reset_index()
 
-    ds = hg.open_dataset('rsdr',mode='w')
+    ds = hg.open_dataset(os.path.join(dashboard_data_dir,'rsdr'),mode='w')
     for scenario in set(all_results.scenario):
         subset = subcatchment_pivot[subcatchment_pivot.scenario==scenario]
         for col in set(all_results.Constituent):
@@ -570,7 +570,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
 
     if network_data_dir and reporting_regions:
         logger.info('Processing RSDRs')
-        build_rsdr_dataset(runs,network_data_dir,reporting_regions)
+        build_rsdr_dataset(dashboard_data_dir,runs,network_data_dir,reporting_regions)
 
     all_tables = []
     for run in runs:
