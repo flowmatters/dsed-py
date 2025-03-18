@@ -421,11 +421,15 @@ def classify_results(raw,parameters,model_param_index):
         if not len(rows):
             return np.nan
         return rows.iloc[0].MODEL
-    logger.info('Matching sediment models (Coarse to Fine)')
 
-    dask_raw = dd.from_pandas(raw,npartitions=20)
-    logger.info('Got partitioned raw data')
-    raw['MODEL'] = dask_raw.map_partitions(lambda df:df.apply(match_sediment_model,axis=1),meta=pd.Series(dtype='str')).compute()
+    if False:
+        logger.info('Matching sediment models (Coarse to Fine) in partitions')
+        dask_raw = dd.from_pandas(raw,npartitions=20)
+        logger.info('Got partitioned raw data')
+        raw['MODEL'] = dask_raw.map_partitions(lambda df:df.apply(match_sediment_model,axis=1),meta=pd.Series(dtype='str')).compute()
+    else:
+        logger.info('Matching sediment models (Coarse to Fine) in single thread')
+        raw['MODEL'] = raw.apply(match_sediment_model,axis=1)
     logger.info('Matched sediment models')
     raw['is_emc_dwc'] = raw['MODEL'].apply(lambda m: m in emc_dwc_models)
     raw['is_timeseries'] = raw['MODEL'].apply(lambda m: m in ts_models)
