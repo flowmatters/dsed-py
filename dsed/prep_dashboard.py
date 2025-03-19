@@ -393,7 +393,7 @@ def add_key(df):
     df['rc'] = df['REGION']+'-'+df['CATCHMENT']
     return df
 
-def classify_results(raw,parameters,model_param_index):
+def classify_results(raw,parameters,model_param_index,nest_dask_jobs=False):
     logger.info('Classifying raw results')
     emc_dwc_parameters = model_param_index[model_param_index.PARAMETER.str.contains('EMC')|model_param_index.PARAMETER.str.contains('Event Mean Concentration')]
     # |model_param_index.PARAMETER.str.contains('DWC')|model_param_index.PARAMETER.str.contains('Dry Weather Concentration')]
@@ -423,7 +423,7 @@ def classify_results(raw,parameters,model_param_index):
             return np.nan
         return rows.iloc[0].MODEL
 
-    if NEST_DASK_JOBS:
+    if nest_dask_jobs:
         logger.info('Matching sediment models (Coarse to Fine) in partitions')
         dask_raw = dd.from_pandas(raw,npartitions=20)
         logger.info('Got partitioned raw data')
@@ -441,7 +441,7 @@ def classify_results(raw,parameters,model_param_index):
     raw = raw.rename(columns=dict(CONSTITUENT='Constituent'))
     return raw
 
-def proces_run_data(runs,data_cache):
+def proces_run_data(runs,data_cache,nest_dask_jobs=False):
     all_tables = load_tables(runs,data_cache)
 
     fu_areas = all_tables['areas']
@@ -492,7 +492,7 @@ def proces_run_data(runs,data_cache):
     raw = pd.concat([fu_results,link_results,other_results])
     raw = add_key(raw)
     raw = raw.dropna(subset=[RESULTS_VALUE_COLUMN])
-    raw = classify_results(raw,parameters,model_parameter_index)
+    raw = classify_results(raw,parameters,model_parameter_index,nest_dask_jobs)
     raw = compute_generated_loads(raw,parameters)
 
     all_tables['raw'] = raw
@@ -580,7 +580,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     all_tables = []
     for run in runs:
         logger.info('Run %s',run_label(run))
-        all_tables.append(dask.delayed(proces_run_data)([run],data_cache))
+        all_tables.append(dask.delayed(proces_run_data)([run],data_cache,NEST_DASK_JOBS))
     all_tables = dask.compute(*all_tables)
     logger.info('Combining all tables')
     all_tables = concat_all_tables(all_tables)
