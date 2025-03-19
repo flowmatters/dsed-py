@@ -20,6 +20,7 @@ PARAM_FN='ParameterTable.csv'
 RAW_FN='RawResults.csv'
 RESULTS_VALUE_COLUMN='Total_Load_in_Kg'
 RUN_METADATA_FN='DSScenarioRunInfo.xml'
+NEST_DASK_JOBS=False
 
 AREAS_FN='fuAreasTable.csv'
 
@@ -422,7 +423,7 @@ def classify_results(raw,parameters,model_param_index):
             return np.nan
         return rows.iloc[0].MODEL
 
-    if False:
+    if NEST_DASK_JOBS:
         logger.info('Matching sediment models (Coarse to Fine) in partitions')
         dask_raw = dd.from_pandas(raw,npartitions=20)
         logger.info('Got partitioned raw data')
