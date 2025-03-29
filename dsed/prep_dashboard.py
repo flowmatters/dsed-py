@@ -441,15 +441,27 @@ def classify_results(raw,parameters,model_param_index,nest_dask_jobs=False):
     raw = raw.rename(columns=dict(CONSTITUENT='Constituent'))
     return raw
 
+def extract_paramter(parameter:pd.DataFrame,param:str,new_name:str=None):
+    if new_name is None:
+        new_name = param
+    param = parameter[parameter.PARAMETER==param][['REGION','SCENARIO','CATCHMENT','VALUE']]
+    param = param.rename(columns=dict(VALUE=new_name))
+    param = param.drop(columns='PARAMETER')
+    return param
+
 def process_link_results(link_results,parameters):
-    link_length = parameters[parameters.PARAMETER=='Link Length'][['REGION','SCENARIO','CATCHMENT','VALUE']]
-    link_length = link_length.rename(columns=dict(VALUE='length'))
+    link_length = extract_paramter(parameters,'Link Length','length')
     link_length['length'] = M_TO_KM * link_length['length'].astype('f')
 
     link_results = pd.merge(link_results,link_length,on=['REGION','SCENARIO','CATCHMENT'],how='left')
     link_results['kg_per_km'] = link_results[RESULTS_VALUE_COLUMN]/link_results['length']
     link_results['kg_per_km_per_year'] = link_results['kg_per_year']/link_results['length']
     link_results = link_results.drop(columns='length')
+
+    floodplain_area = extract_paramter(parameters,'Floodplain Area','floodplain_area')
+    floodplain_area['floodplain_area'] = floodplain_area['floodplain_area'].astype('f')
+
+
     return link_results
 
 def proces_run_data(runs,data_cache,nest_dask_jobs=False):
