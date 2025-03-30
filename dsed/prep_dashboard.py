@@ -9,7 +9,7 @@ import numpy as np
 import hydrograph as hg
 from string import Template
 from . import RunDetails
-from .const import M_TO_KM, PERCENT_TO_FRACTION
+from .const import M_TO_KM, PERCENT_TO_FRACTION, G_TO_KG, CM3_TO_M3, M_TO_MM
 from .post import run_regional_contributor
 import dask.dataframe as dd
 import dask
@@ -21,6 +21,8 @@ RAW_FN='RawResults.csv'
 RESULTS_VALUE_COLUMN='Total_Load_in_Kg'
 RUN_METADATA_FN='DSScenarioRunInfo.xml'
 NEST_DASK_JOBS=False
+
+SEDIMENT_BULK_DENSITY = 1.5 # g/cm^3
 
 AREAS_FN='fuAreasTable.csv'
 
@@ -457,11 +459,46 @@ def process_link_results(link_results,parameters):
     link_results['kg_per_km_per_year'] = link_results['kg_per_year']/link_results['length']
     link_results = link_results.drop(columns='length')
 
-    floodplain_area = extract_paramter(parameters,'Floodplain Area','floodplain_area')
-    floodplain_area['floodplain_area'] = floodplain_area['floodplain_area'].astype('f')
+    link_results_pivot = link_results.pivot(
+        index=['REGION','FEATURE_TYPE','SCENARIO','CATCHMENT','Constituent'],
+        columns='BudgetElement',
+        values='kg_per_year').fillna(0.0).reset_index().rename(columns={'Flood Plain Deposition':'kg_per_year'})
+    link_results_pivot['BudgetElement'] = 'Flood Plain Deposition'
+    link_results_pivot['ELEMENT'] = 'Link'
+    link_results_pivot['Process'] = 'Loss'
+    link_results_pivot['PC'] = 100.0 * link_results_pivot['kg_per_year'] / (link_results_pivot['Subcatchment Supply'] + link_results_pivot['Link In Flow'])
+    link_results_pivot = link_results_pivot[[c for c in link_results_pivot.columns if c not in set(link_results.BudgetElement)]]
+    fp_sediment = link_results_pivot[link_results_pivot.Constituent.str.startswith('Sediment')]
+    fp_other = link_results_pivot[~link_results_pivot.Constituent.str.startswith('Sediment')]
 
+    floodplain_area = extract_paramter(parameters,'Flood Plain Area','floodplain_area')
+    floodplain_area['floodplain_area'] = floodplain_area['floodplain_area'].astype('f')
+    bulk_denstiy_kg_m3 = SEDIMENT_BULK_DENSITY * G_TO_KG / CM3_TO_M3
+    fp_sediment = pd.merge(fp_sediment,floodplain_area,on=['REGION','SCENARIO','CATCHMENT'],how='left')
+    fp_sediment['m^3/year'] = fp_sediment['kg_per_year'] / bulk_denstiy_kg_m3
+    fp_sediment['mm/year'] = M_TO_MM * fp_sediment['m^3/year'] / fp_sediment['floodplain_area']
+    fp_sediment = fp_sediment.drop(columns='floodplain_area')
+
+    floodplain_rows = link_results[link_results.BudgetElement=='Flood Plain Deposition']
+    link_results = link_results[link_results.BudgetElement!='Flood Plain Deposition']
+    floodplain_stats = pd.concat([fp_sediment,fp_other])
+    floodplain_rows = pd.merge(floodplain_rows,floodplain_stats,
+                               on=['REGION','SCENARIO','CATCHMENT','ELEMENT','Constituent','BudgetElement','Process','FEATURE_TYPE'])
+    floodplain_rows = floodplain_rows.rename(columns={'kg_per_year_x':'kg_per_year'}).drop(columns='kg_per_year_y')
+    link_results = pd.concat([link_results,floodplain_rows])
 
     return link_results
+
+def subcatchment_totals(results):
+    grouped = results.groupby(['REGION','SCENARIO','CATCHMENT','Constituent','Process','BudgetElement']).agg(
+        {
+            RESULTS_VALUE_COLUMN:'sum',
+            'kg_per_year':'sum',
+            'AREA':'sum'
+        }).reset_index()
+    grouped['ELEMENT'] = 'Subcatchment'
+    grouped['FEATURE_TYPE'] = 'Catchment'
+    return grouped
 
 def proces_run_data(runs,data_cache,nest_dask_jobs=False):
     all_tables = load_tables(runs,data_cache)
@@ -494,21 +531,39 @@ def proces_run_data(runs,data_cache,nest_dask_jobs=False):
     raw = all_tables['raw']
     fu_results, other_results = split_fu_and_stream(raw,fu_names)
     fu_results = clear_rows_for_zero_area_fus(fu_results,fu_areas,[RESULTS_VALUE_COLUMN,'kg_per_year'],keep_area=True)
+    sc_totals = subcatchment_totals(fu_results)
+    all_tables['sc_totals'] = sc_totals
+
+    fu_results = pd.concat([fu_results,sc_totals])
     fu_results['AREA_HA'] = fu_results['AREA'] * 1e-4
     for col in [RESULTS_VALUE_COLUMN,'kg_per_year']:
         fu_results[f'{col}_per_ha'] = fu_results[col]/fu_results['AREA_HA']
     fu_results = fu_results.drop(columns=['AREA','AREA_HA'])
 
+    sc_inflows_to_link = sc_totals[sc_totals.Process=='Supply'].groupby(
+        ['REGION','SCENARIO','CATCHMENT','Constituent']).agg(
+        {
+            RESULTS_VALUE_COLUMN:'sum',
+            'kg_per_year':'sum'
+        }).reset_index()
+    sc_inflows_to_link['BudgetElement'] = 'Subcatchment Supply'
+    sc_inflows_to_link['Process'] = 'Supply'
+    sc_inflows_to_link['ELEMENT'] = 'Stream'
+    sc_inflows_to_link['FEATURE_TYPE'] = 'Link'
+    all_tables['sc_inflows_to_link'] = sc_inflows_to_link
     link_results = other_results[other_results.ELEMENT.isin(['Link','Stream'])]
+    link_results = pd.concat([link_results,sc_inflows_to_link])
     other_results = other_results[~other_results.ELEMENT.isin(['Link','Stream'])]
 
     link_results = process_link_results(link_results,parameters)
+    all_tables['link_results'] = link_results
 
     raw = pd.concat([fu_results,link_results,other_results])
     raw = add_key(raw)
     raw = raw.dropna(subset=[RESULTS_VALUE_COLUMN])
     raw = classify_results(raw,parameters,model_parameter_index,nest_dask_jobs)
     raw = compute_generated_loads(raw,parameters)
+    raw = raw.reset_index(drop=True)
 
     all_tables['raw'] = raw
     return all_tables
