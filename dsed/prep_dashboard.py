@@ -519,17 +519,28 @@ def concat_all_tables(all_tables):
         result[k] = pd.concat([tbl[k] for tbl in all_tables])
     return result
 
-def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,reporting_regions:str):
+def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,reporting_regions:str,parallel=True):
+    logger.info('Building RSDR dataset')
     jobs = []
-    regional_contributor_ = dask.delayed(run_regional_contributor)
-    for run in runs:
-        region = run['model']
-        logger.info('Preparing regional contributor for %s (%s)',region,run['scenario'])
-        network_fn = glob(os.path.join(network_data_dir,f'{region}*network.json'))[0]
-        run_dir = os.path.dirname(run['parameters'])
-        jobs.append(regional_contributor_(run['model'],network_fn,reporting_regions,run_dir))
-    logger.info('Running %d RSDR jobs',len(jobs))
-    job_results = dask.compute(*jobs)
+    if parallel:
+        regional_contributor_ = dask.delayed(run_regional_contributor)
+        for run in runs:
+            region = run['model']
+            logger.info('Preparing regional contributor for %s (%s)',region,run['scenario'])
+            network_fn = glob(os.path.join(network_data_dir,f'{region}*network.json'))[0]
+            run_dir = os.path.dirname(run['parameters'])
+            jobs.append(regional_contributor_(run['model'],network_fn,reporting_regions,run_dir))
+        logger.info('Running %d RSDR jobs',len(jobs))
+        job_results = dask.compute(*jobs)
+    else:
+        job_results = []
+        for run in runs:
+            region = run['model']
+            logger.info('Running regional contributor for %s (%s)',region,run['scenario'])
+            network_fn = glob(os.path.join(network_data_dir,f'{region}*network.json'))[0]
+            run_dir = os.path.dirname(run['parameters'])
+            job_results.append(run_regional_contributor(region,network_fn,reporting_regions,run_dir))
+
     logger.info('Got %d RSDR results',len(job_results))
 
     for run, results in zip(runs,job_results):
@@ -558,7 +569,7 @@ def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,rep
                 ds.add_table(table,constituent=col,reporting_region=rr,scenario=scenario)
 
 def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None,
-         network_data_dir:str=None,reporting_regions:str=None):
+         network_data_dir:str=None,reporting_regions:str=None,parallel=True):
     '''
     Prepares the dashboard data for the given source data directories
 
@@ -572,6 +583,8 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
         Directory containing the node link networks in Veneer GeoJSON format
     reporting_regions: str
         Shapefile/GeoJSON containing the reporting regions (subcatchments with attributes for RepReg)
+    parallel: bool
+        Whether to run the processing in parallel or not. Default is True. Uses Dask
 
     Notes:
     * Processes RSDRs if network_data_dir and reporting_regions are provided
@@ -590,13 +603,20 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
 
     if network_data_dir and reporting_regions:
         logger.info('Processing RSDRs')
-        build_rsdr_dataset(dashboard_data_dir,runs,network_data_dir,reporting_regions)
+        build_rsdr_dataset(dashboard_data_dir,runs,network_data_dir,reporting_regions,parallel=parallel)
 
-    all_tables = []
-    for run in runs:
-        logger.info('Run %s',run_label(run))
-        all_tables.append(dask.delayed(proces_run_data)([run],data_cache,NEST_DASK_JOBS))
-    all_tables = dask.compute(*all_tables)
+    if parallel:
+        jobs = []
+        for run in runs:
+            logger.info('Run %s',run_label(run))
+            jobs.append(dask.delayed(proces_run_data)([run],data_cache,NEST_DASK_JOBS))
+        all_tables = dask.compute(*jobs)
+    else:
+        all_tables = []
+        for run in runs:
+            logger.info('Run %s',run_label(run))
+            all_tables.append(proces_run_data([run],data_cache,False))
+
     logger.info('Combining all tables')
     all_tables = concat_all_tables(all_tables)
 
