@@ -446,7 +446,6 @@ def extract_paramter(parameter:pd.DataFrame,param:str,new_name:str=None):
         new_name = param
     param = parameter[parameter.PARAMETER==param][['REGION','SCENARIO','CATCHMENT','VALUE']]
     param = param.rename(columns=dict(VALUE=new_name))
-    param = param.drop(columns='PARAMETER')
     return param
 
 def process_link_results(link_results,parameters):
