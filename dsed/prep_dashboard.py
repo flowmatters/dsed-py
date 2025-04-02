@@ -466,8 +466,7 @@ def process_link_results(link_results,parameters):
     link_results_pivot['BudgetElement'] = 'Flood Plain Deposition'
     link_results_pivot['ELEMENT'] = 'Link'
     link_results_pivot['Process'] = 'Loss'
-    # link_results_pivot['PC'] = 100.0 * link_results_pivot['kg_per_year'] / (link_results_pivot['Subcatchment Supply'] + link_results_pivot['Link In Flow'])
-    link_results_pivot['PC'] = 100.0 * link_results_pivot['kg_per_year'] / link_results_pivot['Link In Flow']
+    link_results_pivot['PC'] = 100.0 * link_results_pivot['kg_per_year'] / (link_results_pivot['Subcatchment Supply'] + link_results_pivot['Link In Flow'])
     link_results_pivot['PC'] = link_results_pivot['PC'].fillna(0.0)
     link_results_pivot = link_results_pivot[[c for c in link_results_pivot.columns if c not in set(link_results.BudgetElement)]]
     fp_sediment = link_results_pivot[link_results_pivot.Constituent.str.startswith('Sediment')]
