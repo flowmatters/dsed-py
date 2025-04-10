@@ -606,10 +606,10 @@ def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,rep
     all_results['rc'] = all_results['model'] + '-' + all_results['ModelElement']
 
     subcatchment_results = all_results.groupby(
-        ['rc','Constituent','Rep_Region','scenario']).first().reset_index()
+        ['model','rc','Constituent','Rep_Region','scenario']).first().reset_index()
     subcatchment_pivot = subcatchment_results.pivot(
         columns='Constituent',
-        index=['rc','Rep_Region','scenario'],
+        index=['model','rc','Rep_Region','scenario'],
         values='RSDR').reset_index()
 
     ds = hg.open_dataset(os.path.join(dashboard_data_dir,'rsdr'),mode='w')
@@ -617,7 +617,7 @@ def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,rep
         subset = subcatchment_pivot[subcatchment_pivot.scenario==scenario]
         for col in set(all_results.Constituent):
             logger.info('Storing RSDR results for %s/%s',scenario,col)
-            columns = ['rc','Rep_Region','scenario',col]
+            columns = ['model','rc','Rep_Region','scenario',col]
             for keep, rr in [('last','local'),('first','final')]:
                 table = subset.sort_values(col,ascending=True).drop_duplicates(
                     subset=['rc'],keep=keep)[columns]
