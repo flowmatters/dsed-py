@@ -625,7 +625,8 @@ def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,rep
                 ds.add_table(table,constituent=col,reporting_region=rr,scenario=scenario)
 
 def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None,
-         network_data_dir:str=None,reporting_regions:str=None,parallel=True):
+         network_data_dir:str=None,reporting_regions:str=None,parallel=True,
+         model_parameter_index=None):
     '''
     Prepares the dashboard data for the given source data directories
 
@@ -677,7 +678,16 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     all_tables = concat_all_tables(all_tables)
 
     parameters = all_tables['parameters_orig']
-    model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
+
+    if model_parameter_index is None:
+        logger.info('Creating model parameter index')
+        model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
+    elif isinstance(model_parameter_index,str):
+        logger.info('Loading model parameter index from %s',model_parameter_index)
+        model_parameter_index = pd.read_csv(model_parameter_index,index_col=0)
+    else:
+        logger.info('Using provided model parameter index')
+
     model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
 
     for tbl,grouping_keys in TABLES.items():
