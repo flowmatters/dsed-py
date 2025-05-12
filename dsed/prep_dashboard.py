@@ -195,6 +195,7 @@ def read_csv(fn,data_cache):
 
 def find_all_runs(source_data_directories:list)->list:
     all_runs = []
+    logger.info('Finding all runs in %d directories',len(source_data_directories))
     for source_dir in source_data_directories:
         dir_runs = map_runs_in_directory(source_dir)
         for run in dir_runs:
