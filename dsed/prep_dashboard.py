@@ -121,8 +121,16 @@ def map_run(param_fn:str,base_dir:str)->dict:
     return result
 
 def map_runs_in_directory(results_dir:str) -> list:
+    if not os.path.exists(results_dir):
+        logger.error('Results directory %s does not exist',results_dir)
+        return []
     pts = glob(os.path.join(results_dir,'**','ParameterTable.csv'),recursive=True)
-    if len(pts)>1:
+    count = len(pts)
+    if count == 0:
+        logger.error('No parameter files found in %s',results_dir)
+        return []
+
+    if count>1:
       base_dir = os.path.commonpath(pts)
     else:
       base_dir = results_dir
