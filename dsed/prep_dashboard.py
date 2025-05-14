@@ -11,6 +11,7 @@ from string import Template
 from . import RunDetails
 from .const import M_TO_KM, G_TO_KG, CM3_TO_M3, M_TO_MM
 from .post import run_regional_contributor, back_calculate, MassBalanceBuilder
+from .post.streambank import compute_streambank_parameters
 import dask.dataframe as dd
 import dask
 
@@ -37,51 +38,6 @@ def add_per_year(df,row):
     df['kg_per_year'] = df[RESULTS_VALUE_COLUMN]/row['years']
     return df
 
-def compute_derived_parameters(params,*args):
-    logger.info('Computing derived parameters (Retreat Rate)')
-    BEMF='Bank Erosion Management Factor'
-    BEC='Bank Erosion Coefficent'
-    SLOPE='Link Slope'
-    BFD='Bank Full Flow'
-    RR='Retreat Rate'
-    MRR='Modelled Retreat Rate'
-    SBD='Sediment Bulk Density'
-    BH='Bank Height'
-    LL='Link Length'
-    SE = 'Soil Erodibility'
-    RVP = 'Riparian Vegetation Percentage'
-    MRVE = 'Maximum Riparian Vegetation Effectiveness'
-
-    streambank_params = params[(params.ELEMENT!='Node')&params.PARAMETER.isin([BEMF,BEC,SLOPE,BFD,SBD,BH,LL,SE,RVP,MRVE])]
-
-    MABE='Mean Annual Bank Erosion'
-    MCF='Mass Conversion Factor'
-    BE='Bank Erodibility'
-    index_cols = set(streambank_params.columns)-{'PARAMETER','VALUE'}
-    streambank_params = streambank_params.pivot(index=index_cols,columns='PARAMETER',values='VALUE')
-    streambank_params = streambank_params.astype('f')
-    density_water = 1000.0 # kg.m^-3
-    gravity = 9.81        # m.s^-2
-
-    streambank_params[RR] = streambank_params[BEC] * \
-                            streambank_params[BEMF] * \
-                            streambank_params[BFD] * \
-                            streambank_params[SLOPE] * \
-                            density_water * \
-                            gravity
-    soil_erodibility = streambank_params[SE] * 0.01
-    riparian_efficacy = np.minimum(streambank_params[RVP],streambank_params[MRVE]) * 0.01
-    streambank_params[BE] = (1 - riparian_efficacy) * soil_erodibility
-    streambank_params[MCF] = streambank_params[SBD] * streambank_params[LL] * streambank_params[BH]
-    streambank_params[MRR] = streambank_params[RR] * streambank_params[BE]
-    streambank_params[MABE] = streambank_params[MRR] * streambank_params[MCF]
-
-    streambank_params = pd.melt(streambank_params,ignore_index=False,value_name='VALUE').reset_index()
-    computed_params = streambank_params[streambank_params.PARAMETER.isin([RR,BE,MABE,MRR,MCF])]
-
-    params = pd.concat([params,computed_params])
-    return params
-
 def compute_generated_loads(raw,params):
     logger.info('Back-calculating generated loads')
     raw['Stage'] = 'Delivered'
@@ -94,7 +50,7 @@ def compute_generated_loads(raw,params):
 
 TRANSFORMS={
     'raw':add_per_year,
-    'parameters':compute_derived_parameters
+    'parameters':compute_streambank_parameters
 }
 
 def determine_num_years(results_dir:str):
