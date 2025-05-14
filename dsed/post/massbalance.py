@@ -47,7 +47,23 @@ class MassBalanceBuilder(object):
         for run in self.runs:
             self.build_run(run)
 
-    def build_run(self,run_path):
+    def build_run(self,run_name):
+        results = gbr.Results(run_name)
+        region = run_name.split('_')[0]
+        print(f'{region}: Loading run {run_name}')
+        raw = results.get('RawResults')
+        mba_final, mass_balance_percentages, mass_balance_loss_v_supply = self.build_run_for_raw_results(raw,results.runDetails.yearsOfRecording)
+
+        tags = {
+            'run':run_name,
+            'region':region,
+            'timestep':'mean annual'
+        }
+        self.ds.add_table(mba_final,purpose='mass-balance',**tags)
+        self.ds.add_table(mass_balance_percentages,purpose='mass-balance-percentages',**tags)
+        self.ds.add_table(mass_balance_loss_v_supply,purpose='mass-balance-loss-v-supply',**tags)
+
+    def build_run_for_raw_results(self,raw,years):
         EXCLUDED_BUDGET_ELEMENTS=[
             'Link Intial Load',
             'Link In Flow',
@@ -55,12 +71,9 @@ class MassBalanceBuilder(object):
             'Node Yield',
             'Evaporation',
             'Infiltration',
-            'Rainfall'
+            'Rainfall',
+            'Node Injected Inflow'
         ]
-        results = gbr.Results(run_name)
-        region = run_name.split('_')[0]
-        print(f'{region}: Loading run {run_name}')
-        raw = results.get('RawResults')
 
         #Remove budget elements not required (the last 3 elements refer to flow)
         filteredRaw = raw[~raw.BudgetElement.isin(EXCLUDED_BUDGET_ELEMENTS)]
@@ -70,7 +83,7 @@ class MassBalanceBuilder(object):
         #Groupd values by budget element for each constituent
         massBalanceKg = pd.pivot_table(grouped_rawResults.reset_index(),index = ['Process','BudgetElement'], columns = 'Constituent', values = 'Total_Load_in_Kg')
         #Convert from a total to an annual result
-        massBalanceKgAnnual = massBalanceKg/results.runDetails.yearsOfRecording
+        massBalanceKgAnnual = massBalanceKg/years
 
         #Convert units
         massBalanceAnnual = massBalanceKgAnnual.copy()
@@ -135,6 +148,7 @@ class MassBalanceBuilder(object):
             "Gully",
             "Streambank",
             "Point Source",
+            "Node Injected Mass",
             "Diffuse Dissolved",
             "Undefined",
             "Channel Remobilisation",
@@ -156,7 +170,13 @@ class MassBalanceBuilder(object):
             "Supply",
             "Loss",
             "Residual",
-            "Export"]
+            "Export"
+        ]
+        extra_terms = set([x[1] for x in list(mba_reordered.index)]) - set(budElmntOrder)
+        if len(extra_terms) > 0:
+            print(extra_terms)
+            logger.warning("Extra terms in mass balance: %s",','.join(sorted(extra_terms)))
+
         budElmntIndex = sorted(mba_reordered.index, key=lambda x: budElmntOrder.index(x[1]))
         mba_reordered2 = mba_reordered.reindex(budElmntIndex)
 
@@ -170,13 +190,5 @@ class MassBalanceBuilder(object):
         #mba_final = mba_reordered2.fillna(0)
         #pd.options.display.float_format = '{:,.2f}'.format
         #pd.options.display.float_format = '{0:g}'.format
-
-        tags = {
-            'run':run_name,
-            'region':region,
-            'timestep':'mean annual'
-        }
-        self.ds.add_table(mba_final,purpose='mass-balance',**tags)
-        self.ds.add_table(mass_balance_percentages,purpose='mass-balance-percentages',**tags)
-        self.ds.add_table(mass_balance_loss_v_supply,purpose='mass-balance-loss-v-supply',**tags)
+        return mba_final, mass_balance_percentages, mass_balance_loss_v_supply
 

@@ -10,7 +10,7 @@ import hydrograph as hg
 from string import Template
 from . import RunDetails
 from .const import M_TO_KM, G_TO_KG, CM3_TO_M3, M_TO_MM
-from .post import run_regional_contributor, back_calculate
+from .post import run_regional_contributor, back_calculate, MassBalanceBuilder
 import dask.dataframe as dd
 import dask
 
@@ -388,7 +388,7 @@ def proces_run_data(runs,data_cache,nest_dask_jobs=False):
     model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
 
     logger.info('Processing raw results')
-    raw = all_tables['raw']
+    orig_raw = raw = all_tables['raw']
     fu_results, other_results = split_fu_and_stream(raw,fu_names)
     fu_results = clear_rows_for_zero_area_fus(fu_results,fu_areas,[RESULTS_VALUE_COLUMN,'kg_per_year'],keep_area=True)
     sc_totals = subcatchment_totals(fu_results)
@@ -426,6 +426,18 @@ def proces_run_data(runs,data_cache,nest_dask_jobs=False):
     raw = raw.reset_index(drop=True)
 
     all_tables['raw'] = raw
+
+    mb_calc = MassBalanceBuilder(None,None)
+    try:
+        mba_final, mass_balance_percentages, mass_balance_loss_v_supply = mb_calc.build_run_for_raw_results(orig_raw,runs[0]['years']) # TODO: FIX HACK!
+    except:
+        logger.error('Failed to build mass balance')
+        logger.error('Run: %s',str(runs[0]))
+        raise
+    all_tables['mass_balance'] = mba_final
+    all_tables['mass_balance_percentages'] = mass_balance_percentages
+    all_tables['mass_balance_loss_v_supply'] = mass_balance_loss_v_supply
+
     return all_tables
 
 def concat_all_tables(all_tables):
@@ -532,6 +544,15 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
         for run in runs:
             logger.info('Run %s',run_label(run))
             all_tables.append(proces_run_data([run],data_cache,False))
+
+    mb_dataset = open_hg('massbalance')
+    mb_dataset.rewrite(False)
+    for run, tables in zip(runs,all_tables):
+        mb_dataset.add_table(tables['mass_balance'],run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance')
+        mb_dataset.add_table(tables['mass_balance_percentages'],run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance-percentages')
+        mb_dataset.add_table(tables['mass_balance_loss_v_supply'],run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance-loss-v-supply')
+
+    mb_dataset.rewrite(True)
 
     logger.info('Combining all tables')
     all_tables = concat_all_tables(all_tables)
