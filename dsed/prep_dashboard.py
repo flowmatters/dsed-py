@@ -548,7 +548,10 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     mb_dataset = open_hg('massbalance')
     mb_dataset.rewrite(False)
     for run, tables in zip(runs,all_tables):
-        mb_dataset.add_table(tables['mass_balance'],run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance')
+        mb = tables['mass_balance']
+        mb_dataset.add_table(mb,run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance')
+        mb_clean = mb.rename(columns=lambda c: c.split(' (')[0])
+        mb_dataset.add_table(mb_clean,run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance-clean')
         mb_dataset.add_table(tables['mass_balance_percentages'],run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance-percentages')
         mb_dataset.add_table(tables['mass_balance_loss_v_supply'],run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance-loss-v-supply')
 
