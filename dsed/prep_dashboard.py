@@ -6,12 +6,14 @@ import subprocess
 from time import sleep
 import pandas as pd
 import numpy as np
+import geopandas as gpd
 import hydrograph as hg
 from string import Template
 from . import RunDetails
 from .const import M_TO_KM, G_TO_KG, CM3_TO_M3, M_TO_MM
 from .post import run_regional_contributor, back_calculate, MassBalanceBuilder
 from .post.streambank import compute_streambank_parameters
+from dask.distributed import Client, LocalCluster
 import dask.dataframe as dd
 import dask
 
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 PARAM_FN='ParameterTable.csv'
 RAW_FN='RawResults.csv'
+CLIMATE_FN='climateTable.csv'
 RESULTS_VALUE_COLUMN='Total_Load_in_Kg'
 RUN_METADATA_FN='DSScenarioRunInfo.xml'
 NEST_DASK_JOBS=False
@@ -52,6 +55,14 @@ TRANSFORMS={
     'raw':add_per_year,
     'parameters':compute_streambank_parameters
 }
+
+def load_reporting_regions(reporting_regions:str,reporting_levels:list):
+    if isinstance(reporting_regions,str):
+        reporting_regions = gpd.read_file(reporting_regions)
+    if reporting_levels is None:
+        reporting_levels = ['Region','Basin_35','MU_48','WQI_Cal']
+    reporting_regions = reporting_regions[['SUBCAT']+reporting_levels]
+    return reporting_regions
 
 def determine_num_years(results_dir:str):
     run_info = RunDetails(results_dir)
@@ -170,7 +181,12 @@ def find_all_runs(source_data_directories:list)->list:
             all_runs.append(run)
     return all_runs
 
-def load_tables(runs,data_cache):
+def augment_table(tbl,run):
+    tbl['REGION'] = run['model']
+    tbl['SCENARIO'] = run['scenario']
+    tbl.rename(columns=dict(ModelElement='CATCHMENT',FU='ELEMENT',ModelElementType='FEATURE_TYPE'),inplace=True)
+
+def load_tables(runs,data_cache,reporting_regions=None):
     res = {}
     for table in TABLES.keys():
         logger.info(f'Loading {table} for each run.')
@@ -182,14 +198,16 @@ def load_tables(runs,data_cache):
                 tbl = read_xml(fn,data_cache)
             else:
                 tbl = read_csv(fn,data_cache)
-            tbl['REGION'] = mod['model']
-            tbl['SCENARIO'] = mod['scenario']
-            tbl.rename(columns=dict(ModelElement='CATCHMENT',FU='ELEMENT',ModelElementType='FEATURE_TYPE'),inplace=True)
+
+            augment_table(tbl,mod)
             if table in TRANSFORMS:
                 tbl = TRANSFORMS[table](tbl,mod)
 
             loaded.append(tbl)
         combined = pd.concat(loaded).reset_index().drop(columns='index')
+        if 'CATCHMENT' in combined.columns and reporting_regions is not None:
+            print(reporting_regions.head())
+            combined = pd.merge(combined,reporting_regions,left_on=['CATCHMENT','REGION'],right_on=list(reporting_regions.columns[:2]),how='left')
         res[table] = combined
     return res
 
@@ -316,8 +334,12 @@ def subcatchment_totals(results):
     grouped['FEATURE_TYPE'] = 'Catchment'
     return grouped
 
-def proces_run_data(runs,data_cache,nest_dask_jobs=False):
-    all_tables = load_tables(runs,data_cache)
+def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None,reporting_levels:list=None):
+    if reporting_regions is not None:
+        logger.info('Processing reporting regions')
+        reporting_regions = load_reporting_regions(reporting_regions,reporting_levels)
+
+    all_tables = load_tables(runs,data_cache,reporting_regions)
 
     fu_areas = all_tables['areas']
     fu_areas = fu_areas.rename(columns=dict(Catchment='CATCHMENT',FU='ELEMENT',Area='AREA'))
@@ -383,17 +405,6 @@ def proces_run_data(runs,data_cache,nest_dask_jobs=False):
 
     all_tables['raw'] = raw
 
-    mb_calc = MassBalanceBuilder(None,None)
-    try:
-        mba_final, mass_balance_percentages, mass_balance_loss_v_supply = mb_calc.build_run_for_raw_results(orig_raw,runs[0]['years']) # TODO: FIX HACK!
-    except:
-        logger.error('Failed to build mass balance')
-        logger.error('Run: %s',str(runs[0]))
-        raise
-    all_tables['mass_balance'] = mba_final
-    all_tables['mass_balance_percentages'] = mass_balance_percentages
-    all_tables['mass_balance_loss_v_supply'] = mass_balance_loss_v_supply
-
     return all_tables
 
 def concat_all_tables(all_tables):
@@ -402,30 +413,7 @@ def concat_all_tables(all_tables):
         result[k] = pd.concat([tbl[k] for tbl in all_tables])
     return result
 
-def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,reporting_regions:str,parallel=True):
-    logger.info('Building RSDR dataset')
-    jobs = []
-    if parallel:
-        regional_contributor_ = dask.delayed(run_regional_contributor)
-        for run in runs:
-            region = run['model']
-            logger.info('Preparing regional contributor for %s (%s)',region,run['scenario'])
-            network_fn = glob(os.path.join(network_data_dir,f'{region}*network.json'))[0]
-            run_dir = os.path.dirname(run['parameters'])
-            jobs.append(regional_contributor_(run['model'],network_fn,reporting_regions,run_dir))
-        logger.info('Running %d RSDR jobs',len(jobs))
-        job_results = dask.compute(*jobs)
-    else:
-        job_results = []
-        for run in runs:
-            region = run['model']
-            logger.info('Running regional contributor for %s (%s)',region,run['scenario'])
-            network_fn = glob(os.path.join(network_data_dir,f'{region}*network.json'))[0]
-            run_dir = os.path.dirname(run['parameters'])
-            job_results.append(run_regional_contributor(region,network_fn,reporting_regions,run_dir))
-
-    logger.info('Got %d RSDR results',len(job_results))
-
+def store_rsdr_results(runs,dashboard_data_dir:str,*job_results):
     for run, results in zip(runs,job_results):
         for key in ['scenario','model']:
             results[key] = run[key]
@@ -451,8 +439,48 @@ def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,rep
                 table = table.rename(columns={col:'rsdr'})
                 ds.add_table(table,constituent=col,reporting_region=rr,scenario=scenario)
 
+def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,reporting_regions:str,rsdr_reporting:str='MU_48',client:Client=None):
+    logger.info('Building RSDR dataset')
+    jobs = []
+    for run in runs:
+        region = run['model']
+        logger.info('Preparing regional contributor for %s (%s)',region,run['scenario'])
+        network_fn = glob(os.path.join(network_data_dir,f'{region}*network.json'))[0]
+        run_dir = os.path.dirname(run['parameters'])
+        job = client.submit(run_regional_contributor,region,network_fn,reporting_regions,run_dir,rsdr_reporting)
+        jobs.append(job)
+    logger.info('Running %d RSDR jobs',len(jobs))
+    result = client.submit(store_rsdr_results,runs,dashboard_data_dir,*jobs)
+    return result
+
+def prep_massbalance(run,reporting_areas,data_cache,dataset_path):
+    ds = hg.open_dataset(dataset_path,mode=hg.MODE_WRITE_NO_INDEX)
+    reporting_levels = reporting_areas.columns[1:]
+    raw = read_csv(run['raw'],data_cache)
+    augment_table(raw,run)
+    mb_calc = MassBalanceBuilder(None,None)
+    for level in reporting_levels:
+        values = reporting_areas[level].dropna().unique()
+        for value in values:
+            areas = reporting_areas[reporting_areas[level]==value]
+            raw_subset = pd.merge(raw,areas,left_on=['REGION','CATCHMENT'],right_on=[reporting_levels[0],'SUBCAT'],how='inner')
+            mba_final, mass_balance_percentages, mass_balance_loss_v_supply = mb_calc.build_run_for_raw_results(raw_subset,run['years'])
+            mb_clean = mba_final.rename(columns=lambda c: c.split(' (')[0])
+            tags = dict(
+                scenario=run['scenario'],
+                scale=level,
+                area=value
+            )
+            ds.add_table(mba_final,purpose='mass-balance',**tags)
+            ds.add_table(mb_clean,purpose='mass-balance-clean',**tags)
+            ds.add_table(mass_balance_percentages,purpose='mass-balance-percentages',**tags)
+            ds.add_table(mass_balance_loss_v_supply,purpose='mass-balance-loss-v-supply',**tags)
+    assert ds.index is not None
+    return ds.index
+
+
 def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None,
-         network_data_dir:str=None,reporting_regions:str=None,parallel=True,
+         network_data_dir:str=None,reporting_regions:str=None,reporting_levels:list=None,rsdr_reporting:str=None,parallel:int|Client=None,
          model_parameter_index=None):
     '''
     Prepares the dashboard data for the given source data directories
@@ -467,89 +495,120 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
         Directory containing the node link networks in Veneer GeoJSON format
     reporting_regions: str
         Shapefile/GeoJSON containing the reporting regions (subcatchments with attributes for RepReg)
-    parallel: bool
+    reporting_levels: list
+        List of reporting levels to use for the reporting regions
+    rsdr_reporting: str
+        Field name in the reporting regions shapefile/GeoJSON to use for RSDR reporting
+    parallel: bool or Client
         Whether to run the processing in parallel or not. Default is True. Uses Dask
 
     Notes:
     * Processes RSDRs if network_data_dir and reporting_regions are provided
     '''
+    if isinstance(parallel,int):
+        logger.info('Creating local Dask cluster with %d workers',parallel)
+        cluster = LocalCluster(n_workers=parallel,threads_per_worker=1)
+        client = Client(cluster)
+        parallel = client
+    elif parallel is None:
+        logger.info('Running with default workers')
+        cluster = LocalCluster(threads_per_worker=1,processes=True)
+        client = Client(cluster)
+        parallel = client
+    else:
+        logger.info('Using provided Dask client')
+        client = parallel
 
     if data_cache is None:
         data_cache = os.path.abspath('./results-data-cache')
 
-    def open_hg(lbl):
+    def open_hg(lbl,mode=hg.MODE_WRITE):
         path = os.path.join(dashboard_data_dir,lbl)
         logger.info(f'Opening dataset for %s at %s',lbl,path)
-        return hg.open_dataset(path,'w')
+        return hg.open_dataset(path,mode=mode)
 
     runs = find_all_runs(source_data_directories)
     logger.info('Got %d runs',len(runs))
+    futures = []
 
     if network_data_dir and reporting_regions:
         logger.info('Processing RSDRs')
-        build_rsdr_dataset(dashboard_data_dir,runs,network_data_dir,reporting_regions,parallel=parallel)
+        f = build_rsdr_dataset(dashboard_data_dir,runs,network_data_dir,reporting_regions,rsdr_reporting=rsdr_reporting,client=client)
+        futures.append(f)
 
-    if parallel:
-        jobs = []
-        for run in runs:
-            logger.info('Run %s',run_label(run))
-            jobs.append(dask.delayed(proces_run_data)([run],data_cache,NEST_DASK_JOBS))
-        all_tables = dask.compute(*jobs)
-    else:
-        all_tables = []
-        for run in runs:
-            logger.info('Run %s',run_label(run))
-            all_tables.append(proces_run_data([run],data_cache,False))
-
-    mb_dataset = open_hg('massbalance')
-    mb_dataset.rewrite(False)
-    for run, tables in zip(runs,all_tables):
-        mb = tables['mass_balance']
-        mb_dataset.add_table(mb,run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance')
-        mb_clean = mb.rename(columns=lambda c: c.split(' (')[0])
-        mb_dataset.add_table(mb_clean,run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance-clean')
-        mb_dataset.add_table(tables['mass_balance_percentages'],run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance-percentages')
-        mb_dataset.add_table(tables['mass_balance_loss_v_supply'],run=run['model'],scenario=run['scenario'],region=run['model'],purpose='mass-balance-loss-v-supply')
-
-    mb_dataset.rewrite(True)
+    main_jobs = []
+    for run in runs:
+        logger.info('Run %s',run_label(run))
+        main_jobs.append(client.submit(process_run_data,[run],data_cache,NEST_DASK_JOBS,reporting_regions,reporting_levels))
 
     logger.info('Combining all tables')
-    all_tables = concat_all_tables(all_tables)
+    def create_main_datasets(model_parameter_index,*all_results):
+        all_tables = concat_all_tables(all_results)
+        parameters = all_tables['parameters_orig']
 
-    parameters = all_tables['parameters_orig']
-
-    if model_parameter_index is None:
-        logger.info('Creating model parameter index')
-        model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
-    elif isinstance(model_parameter_index,str):
-        logger.info('Loading model parameter index from %s',model_parameter_index)
-        model_parameter_index = pd.read_csv(model_parameter_index,index_col=0)
-    else:
-        logger.info('Using provided model parameter index')
-
-    model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
-
-    for tbl,grouping_keys in TABLES.items():
-        logger.info(f'Creating dataset for {tbl}')
-        ds = open_hg(tbl)
-        ds.rewrite(False)
-        full_tbl = all_tables[tbl]
-        # full_tbl = full_tbl.dropna()
-        if len(grouping_keys):
-            for grouping, subset in full_tbl.groupby(grouping_keys):
-                tags = dict(zip(grouping_keys,grouping))
-                subset = subset.drop(columns=grouping_keys)
-                ds.add_table(subset,**tags)
+        if model_parameter_index is None:
+            logger.info('Creating model parameter index')
+            model_parameter_index = parameters[['MODEL','PARAMETER']].drop_duplicates()
+        elif isinstance(model_parameter_index,str):
+            logger.info('Loading model parameter index from %s',model_parameter_index)
+            model_parameter_index = pd.read_csv(model_parameter_index,index_col=0)
         else:
-            ds.add_table(full_tbl,purpose=tbl)
-        ds.rewrite(True)
+            logger.info('Using provided model parameter index')
 
-    logger.info('Creating indexes')
-    ds = open_hg('indexes')
-    ds.add_table(model_parameter_index,role='model-parameter')
-    ds.add_table(model_element_index,role='model-element')
+        model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
+
+        for tbl,grouping_keys in TABLES.items():
+            logger.info(f'Creating dataset for {tbl}')
+            ds = open_hg(tbl)
+            ds.rewrite(False)
+            full_tbl = all_tables[tbl]
+            # full_tbl = full_tbl.dropna()
+            if len(grouping_keys):
+                for grouping, subset in full_tbl.groupby(grouping_keys):
+                    tags = dict(zip(grouping_keys,grouping))
+                    subset = subset.drop(columns=grouping_keys)
+                    ds.add_table(subset,**tags)
+            else:
+                ds.add_table(full_tbl,purpose=tbl)
+            ds.rewrite(True)
+
+        logger.info('Creating indexes')
+        ds = open_hg('indexes')
+        ds.add_table(model_parameter_index,role='model-parameter')
+        ds.add_table(model_element_index,role='model-element')
+        ds.add_table(reporting_regions_df,role='reporting-regions')
+        return None
+
+    reporting_regions_df = load_reporting_regions(reporting_regions,reporting_levels)
+
+    logger.info('Building mass balance dataset')
+    mb_dataset = open_hg('massbalance')
+    mb_dataset.rewrite(False)
+    mb_jobs = []
+    for run in runs:
+        region_subset = reporting_regions_df[reporting_regions_df[reporting_levels[0]]==run['model']]
+        mb_jobs.append(client.submit(prep_massbalance,run,region_subset,data_cache,mb_dataset.path))
+
+    def combine_mb_indexes(*indexes):
+        mb_dataset = open_hg('massbalance',hg.MODE_READ_WRITE)
+        mb_dataset.rewrite(False)
+        logger.info('Combining %d indexes',len(indexes))
+        for index in indexes:
+            mb_dataset._add_index(index)
+        mb_dataset.rewrite(True)
+    futures.append(client.submit(combine_mb_indexes,*mb_jobs))
+
+    main_results = client.gather(main_jobs,errors='raise')
+    create_main_datasets(model_parameter_index,*main_results)
+
+    futures = [f for f in futures if f is not None]
+    if len(futures):
+        logger.info('Waiting for %d task(s) to finish',len(futures))
+        results = []
+        for f in futures:
+            results.append(f.result())
+
     logger.info('Done')
-    # return all_tables
 
 def host(dashboard_data_dir:str):
     port = 8765

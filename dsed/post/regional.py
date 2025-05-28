@@ -188,13 +188,13 @@ def regional_contributor(network=None,reporting_regions=None,results_directory=N
     result = pd.concat(region_results)
     return result
 
-def run_regional_contributor(region,network_fn,reporting_regions_fn,run_dir):
+def run_regional_contributor(region,network_fn,reporting_regions_fn,run_dir,rsdr_field):
     import veneer
     import geopandas as gpd
     network = veneer.load_network(network_fn)
     reporting_regions = gpd.read_file(reporting_regions_fn)
     reporting_regions = reporting_regions[reporting_regions.Region==region].copy()
-    reporting_regions = reporting_regions.rename(columns={'Manag_U_48':'RepReg','SUBCAT':'Catchmt'})
+    reporting_regions = reporting_regions.rename(columns={rsdr_field:'RepReg','SUBCAT':'Catchmt'})
 
     return regional_contributor(network,reporting_regions,run_dir)
 
