@@ -138,7 +138,7 @@ class MassBalanceBuilder(object):
         #massBalanceAnnual_transposed2
 
         #Swap the order of the rows
-        processOrder = ["Supply", "Loss", "Residual", "Other", "Total"]
+        processOrder = ["Supply", "Loss", "Other", "Residual", "Total"]
         processIndex = sorted(massBalanceAnnual_transposed2.index, key=lambda x: processOrder.index(x[0]))
         mba_reordered = massBalanceAnnual_transposed2.reindex(processIndex)
         budElmntOrder = [
@@ -155,9 +155,6 @@ class MassBalanceBuilder(object):
             "Link Initial Load",
             "Node Initial Load",
             "Seepage",
-            "DWC Contributed Seepage", # Added
-            "Leached", # Added
-            "TimeSeries Contributed Seepage", # Added
             "Reservoir Decay",
             "Extraction",
             "Flood Plain Deposition",
@@ -165,6 +162,9 @@ class MassBalanceBuilder(object):
             "Reservoir Deposition",
             "Stream Decay",
             "Stream Deposition",
+            "DWC Contributed Seepage", # Added
+            "Leached", # Added
+            "TimeSeries Contributed Seepage", # Added
             "Residual Link Storage",
             "Residual Node Storage",
             "Supply",
