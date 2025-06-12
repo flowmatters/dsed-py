@@ -46,6 +46,12 @@ CLIMATE_INPUTS = {
     'rainfall':USLE_MODEL_TYPES[:2]+['MUSLEEventBasedRFactor']
 }
 
+RUNOFF_PARAMETER_CONVERTERS = {
+    'Sacramento': lambda c: c.lower(),
+    'Simhyd': lambda c: c[0].lower() + c[1:]
+}
+
+
 def levels_required(table ,column ,criteria):
     if len(set(table[column]) )==1:
         return 0
@@ -129,8 +135,8 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         self.replay_hydro = replay_hydro
         self.catchment_customisation = catchment_customisation
         self.network_customisation = network_customisation
-        global RR,ROUTING
-        RR = node_types.Sacramento
+        self.rainfall_runoff_model = node_types.Sacramento
+        global ROUTING
         ROUTING = node_types.StorageRouting
 
     # def _load_json(self,f):
@@ -264,7 +270,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             catchment_template.rr = None
             catchment_template.routing = None
         else:
-            catchment_template.rr = RR
+            catchment_template.rr = self.rainfall_runoff_model
             catchment_template.routing = ROUTING
 
         # def generation_model_for_constituent_and_fu(constituent, cgu=None):
@@ -363,7 +369,22 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         else:
             meta['ts_load'] = None
 
+        meta['rainfall_runoff_model'] = self.identify_rainfall_runoff_model()
+        from_source.init_lookup()
+        logger.info('Using rainfall-runoff model %s' % meta['rainfall_runoff_model'])
+        self.rainfall_runoff_model = from_source.MODEL_LOOKUP[meta['rainfall_runoff_model'].split('.')[-1]]
+
         return meta
+
+    def identify_rainfall_runoff_model(self):
+        try:
+            rr_models = self._load_csv('runoff_models')
+        except:
+            return 'Sacramento'
+
+        types = set(rr_models['model'])
+        assert len(types) == 1, 'Expected one runoff model type, got %s' % ', '.join(types)
+        return types.pop()
 
     def _date_parameteriser(self,meta):
         start = meta['start']
@@ -380,10 +401,13 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         return i
 
     def _runoff_parameteriser(self):
-        sacramento_parameters = self._load_csv('runoff_params')
-        sacramento_parameters['hru'] = sacramento_parameters['Functional Unit']
-        sacramento_parameters = sacramento_parameters.rename(columns={c: c.lower() for c in sacramento_parameters.columns})
-        return ParameterTableAssignment(sacramento_parameters, RR, dim_columns=['catchment', 'hru'])
+        runoff_parameters = self._load_csv('runoff_params')
+        runoff_parameters['hru'] = runoff_parameters['Functional Unit']
+
+        if self.rainfall_runoff_model.name in RUNOFF_PARAMETER_CONVERTERS:
+            converter = RUNOFF_PARAMETER_CONVERTERS[self.rainfall_runoff_model.name]
+            runoff_parameters = runoff_parameters.rename(columns={c: converter(c) for c in runoff_parameters.columns})
+        return ParameterTableAssignment(runoff_parameters, self.rainfall_runoff_model, dim_columns=['catchment', 'hru'])
 
     def _routing_parameteriser(self,link_renames):
         routing_params = _rename_link_tag_columns(self._load_csv('fr-RiverSystem.Flow.StorageRouting'), link_renames)
@@ -880,7 +904,6 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
 def nop(*args,**kwargs):
     pass
-
 
 def lag_outlet_links(network):
     outlets = [n['properties']['id'] for n in network.outlet_nodes()]

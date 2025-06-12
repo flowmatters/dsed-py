@@ -8,7 +8,8 @@ from collections import defaultdict
 from openwater.examples.from_source import get_default_node_template, DEFAULT_NODE_TEMPLATES, storage_template_builder
 from openwater.catchments import \
     DOWNSTREAM_FLOW_FLUX, DOWNSTREAM_LOAD_FLUX, \
-    UPSTREAM_FLOW_FLUX, UPSTREAM_LOAD_FLUX
+    UPSTREAM_FLOW_FLUX, UPSTREAM_LOAD_FLUX, \
+    RUNOFF_VARIABLES, DEFAULT_RUNOFF_VARIABLES
 from dsed.const import *
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
@@ -543,14 +544,16 @@ class DynamicSednetCatchment(object):
 
             if self.rr is not None:
                 runoff_template = OWTemplate('runoff:%s'%hru)
-                runoff_node = runoff_template.add_node(self.model_for(self.rr,hru,*tag_values),process='RR',hru=hru,**kwargs)
+                rr_model = self.model_for(self.rr,hru,*tag_values)
+                runoff_node = runoff_template.add_node(rr_model,process='RR',hru=hru,**kwargs)
 
                 for clim_var, clim_node in climate_nodes.items():
                     template.add_link(OWLink(clim_node,'output',runoff_node,clim_var))
 
-                runoff_template.define_output(runoff_node,'runoff')
-                runoff_template.define_output(runoff_node,'surfaceRunoff','quickflow')
-                runoff_template.define_output(runoff_node,'baseflow')
+                runoff_fluxes = DEFAULT_RUNOFF_VARIABLES
+                runoff_variables = RUNOFF_VARIABLES.get(rr_model.name, DEFAULT_RUNOFF_VARIABLES)
+                for flux, variable in zip(runoff_fluxes,runoff_variables):
+                    runoff_template.define_output(runoff_node,variable,flux)
                 hru_template.nest(runoff_template)
             hrus[hru] = hru_template
             template.nest(hru_template)
