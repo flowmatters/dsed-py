@@ -209,6 +209,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         return combined_cropping,cropping_cgus
 
     def get_cropping_input_timeseries(self,cropping_df):
+        if cropping_df is None:
+            return DataframeInputs(),[]
+
         cropping = cropping_df
         cropping_inputs = DataframeInputs()
 
@@ -282,8 +285,8 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         meta['constituents'] = constituents
 
         # TODO: These are really 'cropping' CGUs. Need a better way to identify. OR not require them?
-        pesticide_cgus = set([c.split('$')[-1] for c in cropping.columns if ('Dissolved_Load_g_per_Ha' in c) or ('Surface_DIN_Load_g_per_Ha' in c)])
-        #pesticide_cgus = pesticide_cgus.union(set(fus).intersection({'Irrigated Cropping','Dryland Cropping'}))
+        pesticide_cgus = set([c.split('$')[-1] for c in cropping.columns if ('Dissolved_Load_g_per_Ha' in c) or ('Surface_DIN_Load_g_per_Ha' in c)]) if cropping is not None else set()
+            #pesticide_cgus = pesticide_cgus.union(set(fus).intersection({'Irrigated Cropping','Dryland Cropping'}))
 
         dissolved_nutrients = [c for c in constituents if '_D' in c or '_F' in c]
         meta['dissolved_nutrients'] = dissolved_nutrients
@@ -303,17 +306,21 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         meta['pesticides'] = pesticides
         meta['pesticide_cgus'] = list(pesticide_cgus)
 
-        meta['timeseries_sediment'] = list(set([c.split('$')[-1] for c in cropping.columns if 'Sediment - Fine$Soil_Load_T_per_Ha' in c]))
+        meta['timeseries_sediment'] = list(set([c.split('$')[-1] for c in cropping.columns if 'Sediment - Fine$Soil_Load_T_per_Ha' in c])) if cropping is not None else []
+
         logger.debug(f'pesticide_cgus: {pesticide_cgus}')
         cg_models = self._load_csv('cgmodels')
         cg_models = simplify(cg_models, 'model', ['Constituent', 'Functional Unit', 'Catchment'])
 
         def cgus_using_model(constituent,model):
             all_fus = cg_models[cg_models.Constituent==constituent]
-            fus_using_model = list(set(all_fus[all_fus.model==model]['Functional Unit']))
-
-            if not len(fus_using_model):
+            matching = all_fus[all_fus.model==model]
+            if not len(matching):
                 return []
+
+            if 'Functional Unit' not in matching.columns:
+                return fus
+            fus_using_model = list(set(matching['Functional Unit']))
 
             all_models_on_fus = set(all_fus[all_fus['Functional Unit'].isin(fus_using_model)].model)
             is_homogenous = len(all_models_on_fus)==1
@@ -344,12 +351,17 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
           'GBR_DynSed_Extension.Models.GBR_DIN_TSLoadModel',
           'Dynamic_SedNet.Models.SedNet_TimeSeries_Load_Model'
         ]
-        ts_load_instances = cg_models[cg_models.model.isin(ts_load_models)][['Functional Unit','Constituent']].drop_duplicates()
-        meta['ts_load'] = {
-            'combos': [list(x) for x in zip(ts_load_instances['Functional Unit'],ts_load_instances['Constituent'])],
-            'cgus': list(set(ts_load_instances['Functional Unit'])),
-            'constituents':list(set(ts_load_instances['Constituent'])),
-        }
+
+        ts_load_instances = cg_models[cg_models.model.isin(ts_load_models)]
+        if len(ts_load_instances):
+            ts_load_instances = ts_load_instances[['Functional Unit','Constituent']].drop_duplicates()
+            meta['ts_load'] = {
+                'combos': [list(x) for x in zip(ts_load_instances['Functional Unit'],ts_load_instances['Constituent'])],
+                'cgus': list(set(ts_load_instances['Functional Unit'])),
+                'constituents':list(set(ts_load_instances['Constituent'])),
+            }
+        else:
+            meta['ts_load'] = None
 
         return meta
 
@@ -407,6 +419,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             fine_sediment_params = fine_sediment_params.rename(
                 columns={c: c.replace('_', '') for c in fine_sediment_params.columns})
             for mt in USLE_MODEL_TYPES:
+              if not hasattr(node_types, mt):
+                logger.warning(f'No model type {mt} in node_types. Skipping USLE parameterisation for this model type.')
+                continue
               usle_parameters = ParameterTableAssignment(fine_sediment_params, getattr(node_types,mt),
                                                       dim_columns=['catchment', 'cgu'])
               res.nested.append(usle_parameters)
