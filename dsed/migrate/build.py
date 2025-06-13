@@ -142,13 +142,19 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
     # def _load_json(self,f):
     #     return json.load(open(os.path.join(self.data_path, f + '.json')))
 
-    def _load_csv(self,f):
+    def _csv_filename(self,f):
         fn = os.path.join(self.data_path, f + '.csv')
         if not os.path.exists(fn):
             fn = fn + '.gz'
             if not os.path.exists(fn):
                 return None
+        return fn
 
+    def _load_csv(self,f):
+        fn = self._csv_filename(f)
+        if fn is None:
+            logger.warning(f'CSV file {f} not found in {self.data_path}')
+            return None
         return pd.read_csv(fn, index_col=0, parse_dates=True,date_format='%Y-%m-%d')
 
     # def _load_time_series_csv(self,f):
@@ -160,6 +166,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         if df is None:
             return None
         return _rename_tag_columns(df)
+
+    def have_csv(self,f):
+        return self._csv_filename(f) is not None
 
     def _get_combined_cropping(self,cropping):
         dwcs = self._load_param_csv('cg-GBR_DynSed_Extension.Models.GBR_Pest_TSLoad_Model')
@@ -350,6 +359,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         meta['emc_cgus'] = cgus_using_model(FINE_SEDIMENT,SOURCE_EMC_MODEL)
         meta['usle_cgus'] = cgus_using_model(FINE_SEDIMENT,DS_SEDIMENT_MODEL)
         meta['gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,GULLY_MODELS)
+        meta['gully_timeseries'] = self.have_csv('gully_timeseries')
         meta['hillslope_emc_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,EMC_DWC_MODELS)
         meta['emc_plus_gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,DS_EMC_GULLY_MODEL)
 
@@ -521,7 +531,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             fine_ts_conversion_factor = ts_sediment_delivery_ratios[ts_sediment_delivery_ratios.constituent==FINE_SEDIMENT]
             apply_dataframe(fine_ts_conversion_factor,node_types.ApplyScalingFactor,complete=False)
 
-        if(len(meta['gully_cgus']) > 0):
+        if (len(meta['gully_cgus']) > 0) and meta['gully_timeseries']:
             gully_timeseries = self._load_csv('gully_timeseries').reindex(self.time_period, method='ffill')
             gully_inputs = DataframeInputs()
             gully_ts_columns = ['Annual Load', 'Annual Runoff']
