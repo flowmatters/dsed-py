@@ -3,6 +3,7 @@ import geopandas as gpd
 import rioxarray as rxr
 import xarray as xr
 from glob import glob
+import dask
 import os
 import math
 import shutil
@@ -18,7 +19,7 @@ def choose_number_of_parallel_workers(example_cover_file=None,cores=None,ram_gb=
     '''
     Attempt to determine a reasonable number of parallel workers to use for processing cover data.
 
-    The cover data processing is easily parallelised into independent jobs, but individual jobs 
+    The cover data processing is easily parallelised into independent jobs, but individual jobs
     can be memory intensive, limiting the number of parallel jobs that can be run at once.
 
     This function function recommends a number of parallel jobs based on the available RAM and the
@@ -148,6 +149,38 @@ def load_cfactor_nc(fn,**kwargs):
     '''
     dataset = xr.open_dataset(fn,**kwargs)
     return apply_crs_to_cfactor(dataset)
+
+def create_cfactor_nc_per_year(src_dir, dest_dir,replace_existing=False):
+    '''
+    Create a NetCDF file for each year in the source directory, containing the all C-factor grids for that year.
+    The source directory is expected to contain C-factor files with a timestamp in the filename.
+    The destination directory will contain the created NetCDF files, which are chunked for efficient processing.
+    '''
+    cfactor_files = match_grid_files(src_dir)
+    def get_ym(fn):
+        fn = os.path.splitext(os.path.basename(fn))[0]
+        ym = fn.split('_')[-1][:6]
+        return ym
+    ym = [get_ym(fn) for fn in cfactor_files]
+    df = pd.DataFrame([ym,cfactor_files]).transpose().rename(columns={0:'ym',1:'fn'}).sort_values('ym')
+    df['y'] = df['ym'].str.slice(0,4).astype('int')
+    df['m'] = df['ym'].str.slice(4).astype('int')
+
+    cpu_count = dask.system.cpu_count()
+
+    jobs = []
+    convert_cfactor_grids_ = dask.delayed(convert_cfactor_grids)
+    os.makedirs(dest_dir, exist_ok=True)
+    for y, data in df.groupby('y'):
+        files = list(data.sort_values('m')['fn'].values)
+        dest_fn = os.path.join(dest_dir,f'cfactor-{y}.nc')
+        if os.path.exists(dest_fn) and not replace_existing:
+            logger.info(f'Skipping existing file {dest_fn}')
+            continue
+        res = convert_cfactor_grids_(files,dest_fn)
+        jobs.append(res)
+    logger.info(f'Running %d jobs across %d processes to convert C-factor grids to NetCDF', len(jobs), cpu_count)
+    _ = dask.compute(*jobs,scheduler='processes', num_workers=cpu_count)
 
 def load_matching(fn,match):
     '''
