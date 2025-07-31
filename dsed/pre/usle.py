@@ -4,11 +4,60 @@ import rioxarray as rxr
 import xarray as xr
 from glob import glob
 import os
+import math
 import shutil
 import rasterio
 from geocube.api.core import make_geocube
 import logging
 logger = logging.getLogger(__name__)
+
+CELL_SIZE=30
+GB=1024*1024*1024
+
+def choose_number_of_parallel_workers(example_cover_file=None,cores=None,ram_gb=None,n_cells=None):
+    '''
+    Attempt to determine a reasonable number of parallel workers to use for processing cover data.
+
+    The cover data processing is easily parallelised into independent jobs, but individual jobs 
+    can be memory intensive, limiting the number of parallel jobs that can be run at once.
+
+    This function function recommends a number of parallel jobs based on the available RAM and the
+    size of a single cover grid. The function assumes that the compute is otherwise idle and that
+    the user is not running other CPU or memory-intensive processes at the same time. You may wish
+    to reduce the number of parallel jobs if you will be running other processes at the same time.
+    '''
+    FLOAT_SIZE=4
+    RASTER_MULTIPLIER=6
+
+    if cores is None:
+        cores = os.cpu_count()
+        logger.info('Using system report CPU count (cores/threads): %d',cores)
+    if ram_gb is None:
+        try:
+            import psutil
+            ram = psutil.virtual_memory()
+            ram_gb = int(ram.total/GB)
+            logger.info('Assuming total available RAM: %dGb',ram_gb)
+        except:
+            ram_gb = 2 * cores
+            logger.info('Cannot detect RAM. Assuming system has 2Gb/core = %dGb',ram_gb)
+    if n_cells is None:
+        if example_cover_file is None:
+            n_cells = 320 * 1e6 # Largest cover grid in the to date is 320 million cells
+            logger.info('No example cfactor provided. Assuming large. n_cells=%d',n_cells)
+        else:
+            raster = rasterio.open(example_cover_file)
+            n_cells = raster.width * raster.height
+            logger.info('Using example cover file %s with n_cells=%d',example_cover_file,n_cells)
+
+    raster_size=n_cells*FLOAT_SIZE/GB
+    ram_per_job = math.ceil(RASTER_MULTIPLIER*raster_size)
+    max_jobs = int(ram_gb/ram_per_job)
+    logger.info('Sufficient RAM for %d jobs',max_jobs)
+    if max_jobs > cores:
+        max_jobs = cores
+        logger.info('Constraining to number cores: %d',max_jobs)
+    return max_jobs
 
 
 def apply_projection(grids,prj_file=None):
