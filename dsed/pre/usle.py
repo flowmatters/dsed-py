@@ -154,15 +154,66 @@ def load_matching(fn,match):
     Load a raster file and reproject it to match the provided raster.
     '''
     data = rxr.open_rasterio(fn,masked=True)
-    matched = data.rio.reproject_match(match)
+    matched = data.rio.reproject_match(match).sel(band=1)
     return matched
 
+def cluster_polygons_by_centroid(df,n_clusters):
+    '''
+    Cluster polygons in a GeoDataFrame by their centroid coordinates using KMeans clustering.
+
+    Used for creating batches of polygons that are geographically close to each other, such
+    that each batch can be processed in parallel without excessive memory usage.
+    '''
+    from sklearn.cluster import KMeans
+    df['cx'] = df.geometry.centroid.x
+    df['cy'] = df.geometry.centroid.y
+    X = df[['cx', 'cy']].values
+    kmeans = KMeans(n_clusters=n_clusters,random_state=0,n_init='auto')
+    df['cluster_label'] = kmeans.fit_predict(X)
+    return [batch for _,batch in df.groupby('cluster_label')]
+
+def filter_geodataframe(gdf,**kwargs):
+    '''
+    Filter a GeoDataFrame by the provided keyword arguments.
+    The keyword arguments are expected to be column names and values to filter by.
+    For example, `filter_geodataframe(gdf, IntFUs='FU1', IntSCs='SC1')` will filter the GeoDataFrame
+    to only include rows where IntFUs is 'FU1' and IntSCs is 'SC1'.
+    '''
+    null_geometry = gdf[pd.isnull(gdf.bounds.minx)]
+    if len(null_geometry) > 0:
+        logger.warning(f'Found {len(null_geometry)} geometries with null bounds, dropping them.')
+        logger.debug(f'Null geometries: {null_geometry}')
+        gdf = gdf.drop(null_geometry.index)
+
+    for key, value in kwargs.items():
+        if value is None:
+            continue
+        if isinstance(value, list):
+            gdf = gdf[gdf[key].isin(value)]
+        else:
+            gdf = gdf[gdf[key] == value]
+    return gdf
+
 def filter_areas(areas,fus=None,catchments=None):
-    if fus is not None:
-        areas = areas[areas.IntFUs.isin(fus)]
-    if catchments is not None:
-        areas = areas[areas.IntSCs.isin(catchments)]
-    return areas
+    return filter_geodataframe(areas, IntFUs=fus, IntSCs=catchments)
+
+def load_filter_rasterise(fn,match=None,**kwargs):
+    '''
+    Load a vector file, filter it by the provided keyword arguments, and generate rasterised versions
+    to match the provided raster.
+
+    The keyword arguments are passed to the `filter_geodataframe` function to filter the areas.
+    If no match is provided, the CRS of the loaded data is used.
+    '''
+    areas = gpd.read_file(fn)
+    areas = filter_geodataframe(areas, **kwargs)
+    if areas.crs is None or \
+       fn.endswith('.json'): # JSON files may not have a CRS defined and are assumed (by Geopandas) to be WGS84
+        assert match.rio.crs is not None
+        areas.set_crs(match.rio.crs,inplace=True,allow_override=True)
+    assert len(areas) > 0, f'No areas found in {fn} with the specified filters: {kwargs}'
+    areas_raster = make_geocube(areas,like=match)
+    return areas, areas_raster
 
 def load_areas(fn,match=None,fus=None,catchments=None):
     '''
@@ -173,18 +224,36 @@ def load_areas(fn,match=None,fus=None,catchments=None):
     Returns a GeoDataFrame of areas and an xarray DataArray of the rasterised areas.
     '''
     areas = gpd.read_file(fn)
-    if fus is not None or catchments is not None:
-        areas = filter_areas(areas,fus,catchments)
-    if areas.crs is None:
+    areas = filter_geodataframe(areas, IntFUs=fus,IntSCs=catchments)
+    if areas.crs is None or \
+       fn.endswith('.json'): # JSON files may not have a CRS defined and are assumed (by Geopandas) to be WGS84
+        logger.info(f'No CRS defined for {fn}, using CRS from match raster')
         assert match.rio.crs is not None
-        areas.set_crs(match.rio.crs,inplace=True)
-    areas_raster = make_geocube(areas,like=match)    
-    return areas, areas_raster.IntSCFU
+        areas.set_crs(match.rio.crs,inplace=True,allow_override=True)
+    assert len(areas) > 0, f'No areas found in {fn} with the specified filters: {fus}, {catchments}'
+    if ('IntSCFU' not in areas.columns) or areas['IntSCFU'].dtype != int:
+        areas['IntSCFU'] = areas.index.astype(int)
+    rasters = make_geocube(areas,like=match)
+    # Ensure the areas are filtered
+    return areas, rasters.IntSCFU
 
 def make_zone_names(areas):
     zone_names = areas.reset_index()
     zone_names['name'] = zone_names['IntSCs'] + '$' + zone_names['IntFUs']
     return zone_names['name'].to_dict()
+
+def load_change(fn,match=None,fus=None,catchments=None,a='NonLinearA',b='NonLinearB'):
+    '''
+    Load change (intersected SC/FU) from a shapefile, filtering by FUs and/or catchments if specified and rasterising the result.
+
+    Rasterisation is done to match the CRS and resolution of the provided `match` raster.
+
+    Returns a GeoDataFrame of areas and an xarray DataArray of the rasterised areas.
+    '''
+    areas, rasters = load_filter_rasterise(fn,match=match,IntFUs=fus,IntSCs=catchments)
+    rasters[a] = rasters[a].fillna(1.0)
+    rasters[b] = rasters[b].fillna(1.0)
+    return areas, rasters[a], rasters[b]
 
 def compute_zonal_timeseries(data,zones,names,suffix=''):
     '''
