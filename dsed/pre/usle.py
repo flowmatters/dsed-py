@@ -60,7 +60,7 @@ def choose_number_of_parallel_workers(example_cover_file=None,cores=None,ram_gb=
     return max_jobs
 
 
-def apply_projection(grids,prj_file=None):
+def apply_projection_to_all_grids(grids,prj_file=None):
     prj_filenames = [os.path.splitext(fn)[0] + '.prj' for fn in grids]
     if prj_file is None:
         for p in prj_filenames:
@@ -75,48 +75,79 @@ def apply_projection(grids,prj_file=None):
             shutil.copyfile(prj_file,prj_filename)
 
 def apply_timestamp_from_filename(ds):
+    '''
+    Extract timestamp from the filename of the dataset and add it as a time coordinate.
+    The filename is expected to be in the format '<prefix>YYYYMM<suffix>.<extension>'.
+    For example, 'cfactor_20220101.asc' will extract the timestamp as
+    2022-01-01 and add it to the dataset as a time coordinate.
+    If the filename does not contain a valid timestamp, it will raise a ValueError.
+    '''
     fn = os.path.splitext(os.path.basename(ds.encoding['source']))[0]
-    y = int(fn[2:6])
-    m = int(fn[6:])
+    while len(fn) and not fn[0].isdigit():
+        fn = fn[1:]
+    if len(fn) < 6:
+        raise ValueError(f'Filename {ds.encoding["source"]} does not contain a valid timestamp in the expected format (e.g. "cfactor_20220101.asc")')
+    y = int(fn[:4])
+    m = int(fn[4:6])
     ds['time'] = pd.Timestamp(y,m,1)
     return ds
 
-def load_cfactor_ascii_grids(directory_or_file_pattern):
+def match_grid_files(directory_or_file_pattern):
+    if '*' in directory_or_file_pattern:
+        file_pattern = directory_or_file_pattern
+    else:
+        for ext in ['*.asc', '*.tif']:
+            file_pattern = os.path.join(directory_or_file_pattern, ext)
+            grids = list(glob(file_pattern))
+            if grids:
+                break
+    return list(glob(file_pattern))
+
+def load_cfactor_grids(directory_or_file_pattern):
     '''
     Load C-factor ascii grids from a directory or a file pattern.
-    If a directory is given, it will look for files with the pattern '*.asc'.
+    If a directory is given, it will look for files with the pattern '*.asc' or '*.tif'.
     If a file pattern is given, it will use that directly.
     The files are expected to be in the same projection and at least one should have a .prj file
 
     Returns an xarray Dataset with a time dimension.
     '''
-    if '*' in directory_or_file_pattern:
-        file_pattern = directory_or_file_pattern
+    if isinstance(directory_or_file_pattern, list):
+        grids = directory_or_file_pattern
     else:
-        file_pattern = os.path.join(directory_or_file_pattern,'*.asc')
-    grids = list(glob(file_pattern))
-    apply_projection(grids)
-    dataset = xr.open_mfdataset(grids,preprocess=apply_timestamp_from_filename,concat_dim='time',combine='nested',parallel=True)
+        grids = match_grid_files(directory_or_file_pattern)
+    if grids[0].endswith('.asc'):
+        apply_projection_to_all_grids(grids)
+    dataset = xr.open_mfdataset(grids,preprocess=apply_timestamp_from_filename,concat_dim='time',combine='nested',parallel=False)
     return dataset
 
-def convert_cfactor_ascii_grids(file_pattern,dest_fn):
+def convert_cfactor_grids(file_pattern,dest_fn):
     '''
     Convert C-factor ascii grids to a NetCDF file.
 
     See `load_cfactor_ascii_grids` for the expected input format.
     The output is a NetCDF file with a time dimension.
     '''
-    dataset = load_cfactor_ascii_grids(file_pattern)
-    dataset.to_netcdf(dest_fn)
+    dataset = load_cfactor_grids(file_pattern)
+    dataset = dataset.rename({'band_data':'cfactor'})
+    dataset.to_netcdf(dest_fn,encoding={'cfactor':{'chunksizes':(1,1,100,100)}})
 
-def load_cfactor_nc(fn):
+def apply_crs_to_cfactor(dataset):
+    if 'cfactor' in dataset:
+        # If the dataset has a 'cfactor' variable, we assume it's the main variable
+        data = dataset['cfactor']
+    else:
+        # Otherwise, we assume the dataset is the main variable
+        data = dataset['band_data']
+    data.rio.write_crs(dataset.spatial_ref.attrs['crs_wkt'],inplace=True)
+    return data
+
+def load_cfactor_nc(fn,**kwargs):
     '''
     Load C-factor NetCDF file, and reinstate the CRS from the spatial_ref attribute.
     '''
-    dataset = xr.open_dataset(fn)
-    data = dataset.band_data
-    data.rio.set_crs(dataset.spatial_ref.attrs['crs_wkt'])
-    return data
+    dataset = xr.open_dataset(fn,**kwargs)
+    return apply_crs_to_cfactor(dataset)
 
 def load_matching(fn,match):
     '''
