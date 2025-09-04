@@ -387,9 +387,8 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         return meta
 
     def identify_rainfall_runoff_model(self):
-        try:
-            rr_models = self._load_csv('runoff_models')
-        except:
+        rr_models = self._load_csv('runoff_models')
+        if rr_models is None:
             return 'Sacramento'
 
         types = set(rr_models['model'])
