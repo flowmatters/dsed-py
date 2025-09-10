@@ -18,6 +18,8 @@ import dask.dataframe as dd
 import dask
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 PARAM_FN='ParameterTable.csv'
 RAW_FN='RawResults.csv'
@@ -206,7 +208,7 @@ def load_tables(runs,data_cache,reporting_regions=None):
             loaded.append(tbl)
         combined = pd.concat(loaded).reset_index().drop(columns='index')
         if 'CATCHMENT' in combined.columns and reporting_regions is not None:
-            print(reporting_regions.head())
+            logger.debug(reporting_regions.head())
             combined = pd.merge(combined,reporting_regions,left_on=['CATCHMENT','REGION'],right_on=list(reporting_regions.columns[:2]),how='left')
         res[table] = combined
     return res

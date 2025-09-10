@@ -13,18 +13,22 @@ from dsed import preprocessors
 from .general import TestServer, write_junit_style_results, arg_or_default
 from datetime import datetime
 import traceback
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 veneer.general.PRINT_SCRIPTS=True
 
 def assert_all_equal(exp,act):
     if not (exp==act).all():
-        print("Expected: %s,\n Actual: %s"%(str(exp),str(act)))
+        logger.critical("Expected: %s,\n Actual: %s"%(str(exp),str(act)))
     assert (exp==act).all()
 
 def assert_empty(results):
     if len(results):
-        print('Differences:')
-        print('\n'.join([str(r) for r in results]))
+        logger.debug('Differences:')
+        logger.debug('\n'.join([str(r) for r in results]))
     assert len(results)==0
 
 def _compare(expected,result,label):
@@ -60,10 +64,10 @@ def _compare(expected,result,label):
 
 def preprocessor_test(context,project_file,preprocessor,preprocess_params,expected):
     try:
-        print('Running %s for %s'%(preprocessor.__name__,project_file))
+        logger.info('Running %s for %s'%(preprocessor.__name__,project_file))
         v = context.start_for_test(project_file)
         result = preprocessor(v,**preprocess_params)
-        print('Preprocessor completed')
+        logger.info('Preprocessor completed')
         failed = False
         if isinstance(expected,dict):
             for key,expected_df in expected.items():
@@ -99,7 +103,7 @@ if __name__=='__main__':
             expected = {key:pd.read_csv(fn) for key,fn in expected_fns.items()}
         label = test.get('label','unlabelled')
         label = "%s (%s)"%(preprocessor,label)
-        print("================= %s ================="%label)
+        logger.info("================= %s ================="%label)
         param_subst = {
             'pwd':os.getcwd().replace('\\','/')
         }
@@ -110,12 +114,12 @@ if __name__=='__main__':
         try:
             start_t = datetime.now()
             preprocessor_test(context,project_fn,getattr(preprocessors,preprocessor),args,expected)
-            print("SUCCESS: %s"%label)
+            logger.info("SUCCESS: %s"%label)
             success=True
             msg=None
         except Exception as e:
-            print('FAILED: %s with %s'%(label,str(e)))
-            print('\n'.join(traceback.format_tb(e.__traceback__)))
+            logger.error('FAILED: %s with %s'%(label,str(e)))
+            logger.error('\n'.join(traceback.format_tb(e.__traceback__)))
             success=False
             msg = str(e)
         finally:

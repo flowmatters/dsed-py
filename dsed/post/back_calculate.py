@@ -3,6 +3,8 @@ import logging
 from ..const import PERCENT_TO_FRACTION
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 LOAD_COLUMNS=[
     'Total_Load_in_Kg',

@@ -3,7 +3,10 @@ import os
 from glob import glob
 import pandas as pd
 import numpy as np
-
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 # 
 THRESHOLD = 1e-2
 THRESHOLD_FRAC = 1e-3
@@ -85,11 +88,11 @@ def test_comparison(lhs,rhs):
 def compare(resultsSet1,resultsSet2):
     files1 = findFiles(resultsSet1)
     files2 = [f.replace(resultsSet1,resultsSet2) for f in files1]
-    print('Comparing %s %s (%d files)'%(resultsSet1, resultsSet2,len(files1)),end='')
+    logger.info('Comparing %s %s (%d files)'%(resultsSet1, resultsSet2,len(files1)),end='')
     pairs = zip(files1,files2)
    
     tmp = {lhs.split('/')[-1]:test_comparison(lhs,rhs) for lhs,rhs in pairs}
-    print(' DONE')
+    logger.info(' DONE')
     return {key:val for key,val in tmp.items() if not val is None}, [k for k,v in tmp.items() if v is None]
 
     

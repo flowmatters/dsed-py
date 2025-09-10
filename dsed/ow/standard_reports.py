@@ -5,6 +5,10 @@ import pandas as pd
 import numpy as np
 from itertools import product
 from dsed.const import *
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 M3_PER_S_TO_L_PER_DAY = PER_SECOND_TO_PER_DAY * M3_TO_L
 
@@ -95,8 +99,7 @@ class TimeSeriesLineItem(object):
       for other_tag in primary_tags:
         if other_tag==tag:continue
         if other_tag in summary.columns:
-          print(summary)
-          print(other_tag,tag)
+          logger.critical(f'{summary}\n{other_tag}, {tag}')
           assert False
 
       for k,v in self.tags.items():
@@ -355,7 +358,7 @@ class DynamicSednetStandardReporting(object):
         result = []
         for k,tbl in input_tables.items():
             if tbl is None:
-                print(f'Missing table {k}')
+                logger.warning(f'Missing table {k}')
                 continue
             tbl = tbl[cols].groupby('Constituent').sum().reset_index()
             tbl['MassBalanceElement'] = k
@@ -708,9 +711,9 @@ def augment_line_item(li:TimeSeriesLineItem,df:pd.DataFrame):
         df = df.drop(columns=[lt])
 
   if len(set(df.columns).intersection(location_tags)) > 1:
-    print(li.model,li.variable,li.process,li.budget_element,li.element_type)
-    print(df)
-    print(df.dtypes)
+    logger.error(f'{li.model}, {li.variable}, {li.process}, {li.budget_element}, {li.element_type}')
+    logger.error(df)
+    logger.error(df.dtypes)
     assert False
 
   if 'cgu' in df.columns and 'FU' in df.columns:
@@ -727,14 +730,14 @@ def augment_line_item(li:TimeSeriesLineItem,df:pd.DataFrame):
   })
 
   if 'ModelElement' not in df.columns:
-    print(li.model,li.variable,li.process,li.budget_element,li.element_type)
-    print(df)
+    logger.debug(f'{li.model}, {li.variable}, {li.process}, {li.budget_element}, {li.element_type}')
+    logger.debug(df)
 
   try:
     df = df[~df.ModelElement.str.startswith('dummy-')].copy()
   except:
-    print(li.model,li.variable,li.process,li.budget_element,li.element_type)
-    print(df)
+    logger.error(f'{li.model}, {li.variable}, {li.process}, {li.budget_element}, {li.element_type}')
+    logger.error(df)
     raise
 
   if (li.element_type == 'Link') and ('FU' not in df.columns):
@@ -754,8 +757,8 @@ def augment_line_item(li:TimeSeriesLineItem,df:pd.DataFrame):
     df['FU'] = 'Node'
 
   if set(df.columns) != {'FU','ModelElement','BudgetElement','Process','ModelElementType','Constituent','Total_Load_in_Kg'}:
-    print(li.model,li.variable,li.process,li.budget_element,li.element_type)
-    print(df)
+    logger.error(f'{li.model}, {li.variable}, {li.process}, {li.budget_element}, {li.element_type}')
+    logger.error(df)
     raise Exception('Invalid columns')
 
   EFFECTIVELY_ZERO=1e-15 # was 1e-6, then 1e-7

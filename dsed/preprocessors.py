@@ -4,6 +4,10 @@ Running the Dynamic Sednet preprocessors from Python
 
 import pandas as pd
 import os
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 PREPROCESSORS=[
     ('climate','Dynamic_SedNet.Parameterisation.Models.ClimateCollationModel',None),
@@ -14,7 +18,7 @@ PREPROCESSORS=[
 ]
 
 def _generate_preprocess_fn(current_module,name,klass,output_name):
-    print(name,klass)
+    logger.debug(f'{name}, {klass}')
     def new_fn(v,**kwargs):
         return run_preprocessor(v,klass,output_name,**kwargs)
     new_fn.__name__ = 'run_%s'%name

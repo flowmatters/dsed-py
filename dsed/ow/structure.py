@@ -11,6 +11,10 @@ from openwater.catchments import \
     UPSTREAM_FLOW_FLUX, UPSTREAM_LOAD_FLUX, \
     RUNOFF_VARIABLES, DEFAULT_RUNOFF_VARIABLES
 from dsed.const import *
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 
@@ -279,7 +283,7 @@ class DynamicSednetCGU(object):
 
             model = self.generation_model(con,catchment_template,**kwargs)
             if model is None:
-                print('No regular constituent generation model for %s'%con)
+                logger.info('No regular constituent generation model for %s'%con)
                 continue
 
             gen_node = template.add_node(model,process='ConstituentGeneration',constituent=con,**kwargs)

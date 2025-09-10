@@ -2,6 +2,8 @@ from .. import const as c
 import logging
 import pandas as pd
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 UNITS={
     'Flow':('ML/d',c.CUMECS_TO_ML_DAY,None),
@@ -50,7 +52,7 @@ class MassBalanceBuilder(object):
     def build_run(self,run_name):
         results = gbr.Results(run_name)
         region = run_name.split('_')[0]
-        print(f'{region}: Loading run {run_name}')
+        logger.info(f'{region}: Loading run {run_name}')
         raw = results.get('RawResults')
         mba_final, mass_balance_percentages, mass_balance_loss_v_supply = self.build_run_for_raw_results(raw,results.runDetails.yearsOfRecording)
 
@@ -174,7 +176,7 @@ class MassBalanceBuilder(object):
         ]
         extra_terms = set([x[1] for x in list(mba_reordered.index)]) - set(budElmntOrder)
         if len(extra_terms) > 0:
-            print(extra_terms)
+            # logger.info(extra_terms)
             logger.warning("Extra terms in mass balance: %s",','.join(sorted(extra_terms)))
 
         budElmntIndex = sorted(mba_reordered.index, key=lambda x: budElmntOrder.index(x[1]))

@@ -6,6 +6,10 @@ from veneer.extract_config import SourceExtractor as VanillaSourceExtractor, ext
 import veneer.extract_config as ec
 from veneer.actions import get_big_data_source
 import veneer
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 PLUGINS=[
     'Dynamic_SedNet.dll',
@@ -16,7 +20,7 @@ def _BEFORE_BATCH_NOP(slf,x,y):
     pass
 
 class DynamicSednetExtractor(VanillaSourceExtractor):
-    def __init__(self,v,dest,results=None,progress=print):
+    def __init__(self,v,dest,results=None,progress=logger.info):
         super().__init__(v,dest,results,progress)
 
     def _extract_runoff_configuration(self):
@@ -24,7 +28,7 @@ class DynamicSednetExtractor(VanillaSourceExtractor):
         actual_rr_types = set(self.v.model.catchment.runoff.get_param_values('theBaseRRModel'))
         if len(actual_rr_types) != 1:
             msg = f'Expected a single rainfall runoff model to be used everywhere. Have {actual_rr_types}'
-            print(msg)
+            logger.info(msg)
             self.progress(msg)
             assert False
 

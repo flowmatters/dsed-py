@@ -3,6 +3,10 @@ Build a Plugins.xml file for use in Source
 '''
 import sys
 import os
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 TEMPLATE='''<?xml version="1.0" encoding="utf-8"?>
 <ArrayOfPlugin xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -35,5 +39,5 @@ def build_plugins_xml(dest,src):
 if __name__ == "__main__":
   dest = os.path.abspath(sys.argv[1])
   src = os.path.abspath(sys.argv[2])
-  print("Building Plugins.xml in %s using plugins in %s"%(dest,src))
+  logger.info("Building Plugins.xml in %s using plugins in %s"%(dest,src))
   build_plugins_xml(dest,src)

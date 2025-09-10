@@ -22,6 +22,8 @@ from openwater.timing import init_timer, report_time, close_timer
 from veneer.general import _extend_network
 from logging import getLogger
 logger = getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 DEFAULT_START='1986/07/01'
 DEFAULT_END='2014/06/30'
@@ -193,9 +195,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             row = row[row.constituent == constituent]
             row = row[row.cgu == cgu]
             if len(row) != 1:
-                print(f'Wrong number of rows. Have {len(row)}, expected 1')
-                print(f'CGU={cgu},Constituent={constituent},Catchment={catchment}')
-                print(row)
+                logger.error(f'Wrong number of rows. Have {len(row)}, expected 1')
+                logger.error(f'CGU={cgu},Constituent={constituent},Catchment={catchment}')
+                logger.error(row)
                 assert False
             row = row.iloc[0]
 
@@ -340,11 +342,11 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             all_models_on_fus = set(all_fus[all_fus['Functional Unit'].isin(fus_using_model)].model)
             is_homogenous = len(all_models_on_fus)==1
             if not is_homogenous:
-                print('Looking for FUs using %s for constituent %s'%(model,constituent))
-                print('Expected one model for fus(%s)/constituent(%s)'%(','.join(fus_using_model),constituent))
-                print('Got: %s'%','.join(all_models_on_fus))
-                print('FU/CGU instances: %d'%len(all_fus))
-                print('FU/CGU instances using model: %d'%len(fus_using_model))
+                logger.error('Looking for FUs using %s for constituent %s'%(model,constituent))
+                logger.error('Expected one model for fus(%s)/constituent(%s)'%(','.join(fus_using_model),constituent))
+                logger.error('Got: %s'%','.join(all_models_on_fus))
+                logger.error('FU/CGU instances: %d'%len(all_fus))
+                logger.error('FU/CGU instances using model: %d'%len(fus_using_model))
 
             assert is_homogenous
             return fus_using_model
@@ -440,7 +442,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         fine_sediment_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_Sediment_Generation')
         if fine_sediment_params is not None:
             usle_timeseries = self._load_time_series_csv('usle_timeseries')
-            usle_timeseries = usle_timeseries.fillna(method='ffill')
+            usle_timeseries = usle_timeseries.ffill()
             assert set(fine_sediment_params.useAvModel) == {False}
             assert len(set(fine_sediment_params.constituent)) == 1
             fine_sediment_params = fine_sediment_params.rename(columns={
@@ -749,7 +751,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
     def build_ow_model(self,
                        link_renames=None,
                        existing_model=None,
-                       progress=print):
+                       progress=logger.info):
         init_timer('Build')
         init_timer('Read structure data')
         network_v = self.network()
@@ -768,7 +770,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         meta = self.assess_meta_structure(cropping)
         meta['link_renames'] = link_renames
-        print(meta)
+        logger.debug(meta)
         # return meta
         # cr_models = self._load_csv('transportmodels')
         # cr_models = simplify(cr_models, 'model', ['Constituent'])
@@ -920,7 +922,7 @@ def lag_outlet_links(network):
                               [network['features'].find_by_to_node(n) for n in outlets])
     single_link_networks = [l for l in links_to_outlets if len(network.upstream_links(l))==0]
     outlet_links = [l['properties']['name'] for l in single_link_networks]
-    print('Outlet links',len(outlet_links),outlet_links)
+    logger.info(f'Outlet links {len(outlet_links)} {outlet_links}')
     return lag_links(outlet_links)
 
 def lag_links(links):
@@ -930,7 +932,7 @@ def lag_headwater_links(network):
     links = network['features'].find_by_feature_type('link')
     headwater_links = [l for l in links if len(network.upstream_links(l))==0]
     headwater_link_names = [l['properties']['name'] for l in headwater_links]
-    print('Headwater links',len(headwater_link_names),headwater_link_names)
+    logger.info(f'Headwater links {len(headwater_link_names)} {headwater_link_names}')
     return lag_links(headwater_link_names)
 
 def lag_non_routing_links(params):
@@ -956,7 +958,7 @@ def map_link_name_mismatches(network):
     lookup['new_name'].to_dict()
 
     result = lookup['new_name'].to_dict()
-    print(result)
+    logger.debug(result)
 
     return result
 
@@ -968,4 +970,9 @@ def _arg_parser():
 if __name__=='__main__':
   import veneer.extract_config as ec
   args = ec._parsed_args(_arg_parser())
-  from_source.build_main(build_ow_model,**args)
+  formatter = '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+  if args["verbose"]:
+      logging.basicConfig(level=logging.INFO, format=formatter)
+  if args["debug"]:
+      logging.basicConfig(level=logging.DEBUG, format=formatter)
+  from_source.build_main(build_ow_model, **args)

@@ -24,7 +24,7 @@ def write_junit_style_results(results,fn,suite,test_type='RegressionTest',):
     test_cases = []
     for k,v in results.items():
         tc = TestCase(k,test_type,v['elapsed'],v['message'],'')
-        print(v)
+        logger.debug(v)
         if not v['success']:
             tc.add_failure_info(v['message'])
         test_cases.append(tc)
@@ -62,7 +62,7 @@ class TestServer(object):
             self.temp_dir = tempfile.mkdtemp('_dsed_test')
 
         dest = os.path.join(self.temp_dir,'veneer_cmd')
-        print(self.veneer_path,self.source_version,dest)
+        logger.debug(f'{self.veneer_path}, {self.source_version}, {dest}')
         veneer_cmd_path = create_command_line(self.veneer_path,self.source_version,
                                               dest=dest,force=True,source_path=self.source_path)
 
@@ -73,7 +73,7 @@ class TestServer(object):
                                 return_io=True,additional_plugins=self.plugins)
         end_load = datetime.now()
         elapsed_load = (end_load - start_load).total_seconds()
-        print('Loaded in %s seconds'%elapsed_load)
+        logger.info('Loaded in %s seconds'%elapsed_load)
 
         return Veneer(port=ports[0])
 
@@ -81,11 +81,11 @@ class TestServer(object):
         print_from_all(self.error_streams,'ERROR')
         print_from_all(self.output_streams,'OUTPUT')
         if self.processes:
-            print('Shutting down server')
+            logger.info('Shutting down server')
             kill_all_now(self.processes)
-            print('Pause for the process to end...')
+            logger.info('Pause for the process to end...')
             time.sleep(2)
-            print('...Resuming')
+            logger.info('...Resuming')
             self.processes = None
 
         if self.delete_after:

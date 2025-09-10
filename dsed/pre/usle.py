@@ -14,6 +14,8 @@ import rasterio
 from geocube.api.core import make_geocube
 import logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.NOTSET)
+logger.propagate = True
 
 CELL_SIZE=30
 GB=1024*1024*1024
@@ -336,7 +338,7 @@ def compare_to_source(computed,path):
     for col in computed:
         fn = os.path.join(path,f'{col}.csv')
         if not os.path.exists(fn):
-            print(f'No source version: {fn}')
+            logger.warning(f'No source version: {fn}')
             continue
         source_version = pd.read_csv(fn,index_col=0,parse_dates=True,dayfirst=True)
         source_version = source_version[source_version.index.isin(computed.index)]
