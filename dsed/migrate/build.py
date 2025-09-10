@@ -971,6 +971,7 @@ if __name__=='__main__':
   import veneer.extract_config as ec
   args = ec._parsed_args(_arg_parser())
   formatter = '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+  logging.basicConfig(level=logging.WARNING, format=formatter)
   if args["verbose"]:
       logging.basicConfig(level=logging.INFO, format=formatter)
   if args["debug"]:
