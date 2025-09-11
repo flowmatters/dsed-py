@@ -3,8 +3,7 @@ import numpy as np
 import os
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 def apply_catchment_names_for_upstream_nodes(results,network):
     results = results.copy()

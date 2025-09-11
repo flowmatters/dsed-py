@@ -16,8 +16,7 @@ from .general import TestServer, write_junit_style_results, arg_or_default
 import pandas as pd
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 RUN_NAME='regression_test'
 REGRESSION_TEST_RUN_OPTIONS={

@@ -18,8 +18,7 @@ import dask.dataframe as dd
 import dask
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 PARAM_FN='ParameterTable.csv'
 RAW_FN='RawResults.csv'

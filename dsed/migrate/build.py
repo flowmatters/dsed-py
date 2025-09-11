@@ -22,8 +22,7 @@ from openwater.timing import init_timer, report_time, close_timer
 from veneer.general import _extend_network
 from logging import getLogger
 logger = getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 DEFAULT_START='1986/07/01'
 DEFAULT_END='2014/06/30'
@@ -971,9 +970,10 @@ if __name__=='__main__':
   import veneer.extract_config as ec
   args = ec._parsed_args(_arg_parser())
   formatter = '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
-  logging.basicConfig(level=logging.WARNING, format=formatter)
   if args["verbose"]:
-      logging.basicConfig(level=logging.INFO, format=formatter)
+    logging.basicConfig(level=logging.INFO, format=formatter)
   if args["debug"]:
-      logging.basicConfig(level=logging.DEBUG, format=formatter)
+    logging.basicConfig(level=logging.DEBUG, format=formatter)
+  elif not args["verbose"]: 
+    logging.basicConfig(level=logging.WARNING, format=formatter)
   from_source.build_main(build_ow_model, **args)

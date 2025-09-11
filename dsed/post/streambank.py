@@ -2,8 +2,7 @@ import logging
 import numpy as np
 import pandas as pd
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 def compute_streambank_parameters(params,*args):
     logger.info('Computing derived parameters (Retreat Rate)')

@@ -7,8 +7,7 @@ from itertools import product
 from dsed.const import *
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 M3_PER_S_TO_L_PER_DAY = PER_SECOND_TO_PER_DAY * M3_TO_L
 

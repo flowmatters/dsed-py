@@ -14,8 +14,7 @@ import rasterio
 from geocube.api.core import make_geocube
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 CELL_SIZE=30
 GB=1024*1024*1024

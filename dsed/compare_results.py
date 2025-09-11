@@ -5,8 +5,7 @@ import pandas as pd
 import numpy as np
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 # 
 THRESHOLD = 1e-2
 THRESHOLD_FRAC = 1e-3

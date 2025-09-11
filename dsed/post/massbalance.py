@@ -2,8 +2,7 @@ from .. import const as c
 import logging
 import pandas as pd
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 UNITS={
     'Flow':('ML/d',c.CUMECS_TO_ML_DAY,None),

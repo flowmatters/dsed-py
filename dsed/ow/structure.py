@@ -13,8 +13,7 @@ from openwater.catchments import \
 from dsed.const import *
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 

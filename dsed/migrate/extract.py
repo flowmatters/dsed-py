@@ -8,8 +8,7 @@ from veneer.actions import get_big_data_source
 import veneer
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 PLUGINS=[
     'Dynamic_SedNet.dll',

@@ -15,8 +15,7 @@ from datetime import datetime
 import traceback
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.NOTSET)
-logger.propagate = True
+
 
 veneer.general.PRINT_SCRIPTS=True
 
