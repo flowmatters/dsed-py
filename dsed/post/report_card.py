@@ -1,0 +1,2320 @@
+import os
+from pathlib import Path
+import moriasi
+import spotpy
+import matplotlib
+import dsed.const as c
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.sankey import Sankey
+import logging
+logger = logging.getLogger(__name__)
+
+CONSTITUENT_REPORTING_NAMES={
+    'Sediment - Fine': 'TSS',
+    'N_Particulate': 'PN',
+    'P_Particulate': 'PP',
+    'P_FRP': 'DIP',
+    'N_DON': 'DON',
+    'P_DOP': 'DOP',
+    'N_DIN': 'DIN'
+}
+
+OVERALL_REGION='Overall'
+OBSERVATION_COLUMN='Observations'
+
+FU_COLORS = ['yellow','darkgreen','plum','purple','lime','gray','orangered','navy','greenyellow','red',]
+
+REGION_LU_FILE_NAME_SUFFIX = '_Subcat_Regions_LUT.csv'
+REGION_LUT_NODE_SC_FILENAME = '_Reg_cat_node_link.csv'
+
+STANDARD_PIE_OPTIONS=dict(autopct='%1.1f%%', labels=None, fontsize=0, figsize=(12,12),pctdistance=0.1, radius=1.1,wedgeprops={"edgecolor":"k",'linewidth': 1, 'linestyle': 'solid'})
+PARAS_COMPARE_LATEST = [
+    'Flow',
+    'TSS',
+    'TN',
+    'PN',
+    'DIN',
+    'DON',
+    'TP',
+    'PP',
+    'DIP',
+    'DOP',
+]
+
+def save_figure(fn):
+    plt.savefig(fn,dpi=200,bbox_inches="tight")
+    plt.clf()
+
+def getRegionLUTPath(main_path,regionIDString):
+    # regLUTPath = main_path[0:main_path.rfind("\\")]
+    regFileIn = os.path.join(main_path,'Regions', regionIDString + REGION_LU_FILE_NAME_SUFFIX)
+    return regFileIn
+
+def rename_constituents(df):
+    df = df.copy()
+    df['Constituent'] = df['Constituent'].replace(CONSTITUENT_REPORTING_NAMES)
+    return df
+
+def filter_for_good_quality_observations(df,copy=True):
+    result = df[df['RepresentivityRating'].isin(['Excellent','Good','Moderate'])]
+    if copy:
+        return result.copy()
+    return result
+
+def model_results_dir(main_path):
+    return os.path.join(main_path,'SMP_ResultsSets_PointOfTruth')
+
+def load_model_results(main_path,region,model,result):
+    fn = os.path.join(
+        model_results_dir(main_path),
+        region,
+        'Model_Outputs',
+        model,
+        result)
+    result = pd.read_csv(fn,header=0)
+    return result
+
+def process_all_dfs(dfs,process):
+    '''
+    Run the same process (callable) on all DataFrames referenced from a set of nested
+    dictionaries.
+    '''
+    result = {}
+    for k,v in dfs.items():
+        if isinstance(v,dict):
+            result[k] = process_all_dfs(v,process)
+        else:
+            result[k] = process(v)
+    return result
+
+def to_percentage_of_whole(dfs,axis=0):
+    '''
+    Convert all DataFrames in a nested set of dictionaries to contain values that are a percentage
+    of either the entire column (default) or row (axis=1)
+    '''
+    def process(df):
+        return df.div(df.sum(axis=axis), axis='index' if axis==1 else 'columns') * 100
+    return process_all_dfs(dfs,process)
+
+def scale_all_dfs(dfs,scale):
+    '''
+    Scale all DataFrames in a nested set of dictionaries by a constant factor
+    '''
+    def process(df):
+        return df * scale
+    return process_all_dfs(dfs,process)
+
+def concat_data_frames_at_level(dfs,level):
+    if level > 0:
+        return {k: concat_data_frames_at_level(v,level-1) for k,v in dfs.items()}
+    
+    entries = list(dfs.items())
+    if isinstance(entries[0][1],pd.DataFrame):
+        return pd.concat([v for k,v in entries],axis=1,keys=[k for k,v in entries]).T.droplevel(1).T
+    
+    inverted = {}
+    for k0,v0 in entries:
+        for k1,v1 in v0.items():
+            if k1 not in inverted:
+                inverted[k1] = {}
+            inverted[k1][k0] = v1
+    return concat_data_frames_at_level(inverted,level+1)
+
+def create_output_directories(base,regions):
+    reportcardOutputsPrefix = Path(base)
+
+    paths = []
+    for region in regions:
+        logger.info("Setting up directories: %s",region)
+
+        #Region
+        outDirReg = reportcardOutputsPrefix / region
+        paths.append(outDirReg)
+        ## Process
+        #Region
+        paths.append(outDirReg / 'processBasedRegionSupply')
+        paths.append(outDirReg / 'processBasedRegionExports')
+        paths.append(outDirReg / 'processBasedBasinSupply')
+        paths.append(outDirReg / 'processBasedBasinExports')
+        paths.append(outDirReg / 'processBasedExports')
+
+        ## Load Reduction
+        outDirReduc = outDirReg / 'percentReductions'
+        paths.append(outDirReduc)
+        #Region
+        paths.append(outDirReduc / 'processBasedRegionSupply')
+        paths.append(outDirReduc / 'processBasedRegionExports')
+
+        #Landuse
+        paths.append(outDirReg / 'landuseBasedSupply')
+        outDirExpLU = outDirReg / 'landuseBasedExports'
+        paths.append(outDirExpLU)
+        outDirSupLUReduc = outDirReg / 'percentReductions' / 'processBasedLanduseSupply'
+        paths.append(outDirSupLUReduc)
+        outDirExpLUReduc = outDirReg / 'percentReductions' / 'processBasedLanduseExports'
+        paths.append(outDirExpLUReduc)
+
+        ## Predev / Anthro
+        outDirSupAnthro = outDirReg / 'predevAnthropogenicExports'
+        paths.append(outDirSupAnthro)
+        outDirExpAnthro = outDirReg / 'predevAnthropogenicExports'
+        paths.append(outDirExpAnthro)
+
+        ## Modelled vs Measured
+        outDirMvM = outDirReg / 'modelledVSmeasured'
+        outDirMvM_quality = outDirMvM / 'qualityData'
+        outDirMvM_all = outDirMvM / 'allData'
+        paths.append(outDirMvM_quality / 'ratios')
+        paths.append(outDirMvM_all / 'ratios')
+        paths.append(outDirMvM_quality / 'averageAnnuals' / 'bySites')
+        paths.append(outDirMvM_all / 'averageAnnuals' / 'bySites')
+        paths.append(outDirMvM_quality / 'averageAnnuals' / 'byConstituents')
+        paths.append(outDirMvM_all / 'averageAnnuals' / 'byConstituents')
+        paths.append(outDirMvM_quality / 'Moriasi')
+        paths.append(outDirMvM_all / 'Moriasi')
+
+        paths.append(outDirMvM_quality / 'annuals')
+        paths.append(outDirMvM_all / 'annuals')
+
+        ## Sankey
+        paths.append(outDirReg / 'budgetExports_sankeyDiagrams')
+
+        ## Stream
+        paths.append(outDirReg / 'Stream_Length' / 'landUSeAreas_streamLengths')
+        ## summary table
+        paths.append(outDirReg / 'summaryTables')
+        paths.append(outDirReg / 'summaryTables' / 'landUSeAreas_streamLengths')
+
+    for p in paths:
+        Path(p).mkdir(parents=True, exist_ok=True)
+    return paths
+
+def ensure_paths_have_files(paths):
+    empty_count = 0
+    for p in paths:
+        if not os.path.exists(p):
+            logger.warning('Previously created path does not exist: %s',p)
+            continue
+        if os.path.isdir(p) and not os.listdir(p):
+            logger.warning('Previously created path is empty: %s',p)
+            empty_count += 1
+    assert empty_count == 0, f"{empty_count} paths are empty"
+
+# def for_each_region_model()
+
+def read_regional_contributor(main_path,regions, models, rc):
+    result = {}
+    for region in regions:
+        print (region)
+
+        regLUT = pd.read_csv(getRegionLUTPath(main_path,region))
+        regLUT.rename(columns={'SUBCAT': 'ModelElement'}, inplace=True)
+
+        result[region] = {} #model: pd.DataFrame() for model in MODELs}
+
+        for model in models:
+            print('  ',model)
+
+            # region_txt = regions[regions.index(region)], # ????
+            RegContributorDataGrid_fil_df = load_model_results(main_path,region,model+'_'+rc,'RegContributorDataGrid.csv')
+            #Join the reg Cont table and the regions df
+            RegContributorDataGrid_fil_df = pd.merge(RegContributorDataGrid_fil_df, regLUT, on='ModelElement')
+            RegContributorDataGrid_fil_df = rename_constituents(RegContributorDataGrid_fil_df)
+            result[region][model] = RegContributorDataGrid_fil_df
+    return result
+
+FILL_FUS=['Bananas','Dairy','Sugarcane']
+def add_columns_for_missing_fus(df):
+    for fu in FILL_FUS:
+        if fu not in df:
+            df[fu] = np.nan
+
+def load_basin_export_tables(regions,models,regional_contributor,constituents,fus_of_interest):
+    result = {}
+
+    for region in regions:
+        print(region)
+
+        region_results = result[region] = {}
+
+        for model in models:
+            print('  ',model)
+
+            data = regional_contributor[region][model]
+
+            data_summary = data.reset_index().groupby(['Manag_Unit_48','Constituent','FU']).sum(numeric_only=True)
+            basins = data_summary.index.levels[0]
+
+            model_results = region_results[model] = {}
+
+            for basin in basins:
+                print('    ',basin)
+
+                basin_results = model_results[basin] = {}
+                data_summary2 = data_summary.loc[basin].T[constituents]
+                data_summary3 = data_summary2.T
+
+                for con in constituents:
+                    print ('      ',con)
+
+                    basin_results[con] = data_summary3.loc[con]['LoadToRegExport (kg)']
+
+                basin_results = model_results[basin] = pd.DataFrame(basin_results).T
+                # BasinLoadToRegExport_FU[region][model][basin]['Grazing'] = BasinLoadToRegExport_FU[region][model][basin]['Grazing Forested'] + \
+                #                                                            BasinLoadToRegExport_FU[region][model][basin]['Grazing Open']
+                basin_results['Cropping'] = basin_results['Dryland Cropping'] + basin_results['Irrigated Cropping']
+                basin_results['Urban + Other'] = basin_results['Urban'] + basin_results['Other']
+                add_columns_for_missing_fus(basin_results)
+
+                basin_results = model_results[basin] = basin_results[fus_of_interest].T
+    return result
+
+def build_region_export_tables(regions,models,basin_load_to_reg_export):
+    result = {}
+
+    for region in regions:
+        print(region)
+
+        result[region] = {}
+
+        for model in models:
+            base = basin_load_to_reg_export[region][model]
+            basins = base.keys()
+            print('  ',model,basins)
+            region_sum_fu = 0
+
+            for basin in basins:
+                region_sum_fu = region_sum_fu + basin_load_to_reg_export[region][model][basin].fillna(0)
+                region_sum_fu
+
+            result[region][model] = region_sum_fu
+    return result
+
+def build_overall_export_tables(regions,models,region_load_to_reg_export):
+    result = {}
+
+    for model in models:
+        print(model)
+        overall_sum_FU = 0
+
+        for region in regions:
+            print('  ',region)
+            overall_sum_FU = overall_sum_FU + region_load_to_reg_export[region][model].fillna(0)
+        result[model] = overall_sum_FU
+    return result
+
+def process_based_basin_export_tables(regions,models,constituents,regional_contributor):
+    result = {}
+
+    for region in regions:
+        print(region)
+
+        result[region] = {}
+        for model in models:
+            print('  ',model)
+
+            data = regional_contributor[region][model]
+            # data_summary_Process = data.reset_index().groupby(['Rep_Region','Constituent','Process']).sum()
+            data_summary_Process = data.reset_index().groupby(['Manag_Unit_48','Constituent','Process']).sum()
+            basins = data_summary_Process.index.levels[0]
+
+            result[region][model] = {}
+
+            for basin in basins:
+                print ('    ',basin)
+
+                result[region][model][basin] = {}
+                data_summary2_Process = data_summary_Process.loc[basin].T[constituents]
+                data_summary3_Process = data_summary2_Process.T
+
+                for con in constituents:
+                    print ('      ',con)
+                    result[region][model][basin][con] = data_summary3_Process.loc[con]['LoadToRegExport (kg)']
+
+                    if con in ['TSS','PN','PP']:
+                        result[region][model][basin][con] = pd.DataFrame(result[region][model][basin][con]).T
+
+                        if con =='TSS':
+                            result[region][model][basin][con]['Hillslope'] = result[region][model][basin][con]['Hillslope surface soil'] + \
+                                                                                                   result[region][model][basin][con]['Undefined']
+                        elif con in ['PN','PP']:
+                            result[region][model][basin][con]['Hillslope'] = result[region][model][basin][con]['Hillslope no source distinction'] + \
+                                                                                                   result[region][model][basin][con]['Undefined']
+
+                        result[region][model][basin][con]['Streambank'] = result[region][model][basin][con]['Streambank']
+                        result[region][model][basin][con]['Gullyt'] = result[region][model][basin][con]['Gully']
+                        result[region][model][basin][con]['ChannelRemobilisation'] = result[region][model][basin][con]['Channel Remobilisation']
+
+                        PROCESSsOfInterest = ['Hillslope','Streambank','Gully','ChannelRemobilisation']
+
+                    elif con=='DIN':
+                        result[region][model][basin][con] = pd.DataFrame(result[region][model][basin][con]).T
+
+                        result[region][model][basin][con]['SurfaceRunoff'] = result[region][model][basin][con]['Undefined'] + \
+                                                                             result[region][model][basin][con]['Diffuse Dissolved'] + \
+                                                                             result[region][model][basin][con]['Hillslope no source distinction']
+
+                        if 'Seepage' in result[region][model][basin][con].columns:
+                            result[region][model][basin][con]['Seepage'] = result[region][model][basin][con]['Seepage']
+                        else:
+                            result[region][model][basin][con]['Seepage'] = 0
+
+                        result[region][model][basin][con]['PointSource'] = result[region][model][basin][con]['Point Source']
+
+                        PROCESSsOfInterest = ['SurfaceRunoff','Seepage','PointSource']
+
+                    result[region][model][basin][con] = result[region][model][basin][con][PROCESSsOfInterest].T
+    return result
+
+def process_based_region_export_tables(regions,constituents,basin_export_by_process):
+    result = {}
+
+    for region in regions:
+        print(region)
+
+        result[region] = {}
+
+        for con in constituents:
+            print('  ',con)
+
+            base = basin_export_by_process[region]['BASE']
+            basins = base.keys()
+
+            region_sum_process = 0
+
+            for basin in basins:
+                region_sum_process = region_sum_process + basin_export_by_process[region]['BASE'][basin][con].fillna(0)
+                region_sum_process
+
+            result[region][con] = region_sum_process
+    return result
+
+def process_based_overall_export(regions,constituents,region_export_by_process):
+    result = {}
+
+    for con in constituents:
+        print(con)
+        overall_sum_process = 0
+
+        for region in regions:
+            print('  ',region)
+
+            overall_sum_process = overall_sum_process + region_export_by_process[region][con].fillna(0)
+
+        result[con] = overall_sum_process
+    return result
+
+def load_regional_source_sink(main_path,regions,models,rc):
+    result = {}
+
+    for region in regions:
+        print (region)
+
+        result[region] = {}
+        regLUT = pd.read_csv(getRegionLUTPath(main_path,region))
+        regLUT.rename(columns={'SUBCAT': 'ModelElement'}, inplace=True)
+
+        for model in models:
+            print('  ',model)
+            result[region][model] = load_model_results(main_path,region,model+'_'+rc,'RegionalSourceSinkSummaryTable.csv')
+    return result
+
+def getRegion_cat_node_link_Path(main_path,regionIDString):
+    regLUTPath = main_path[0:main_path.rfind("\\")]
+    regFileIn = os.path.join(regLUTPath, 'Regions', regionIDString + REGION_LUT_NODE_SC_FILENAME)
+    return regFileIn
+
+def region_source_sink_summary(main_path,regions,models,rc):
+    result = {}
+
+    for region in regions:
+        print (region)
+
+        result[region] = {}
+
+        regLUT = pd.read_csv(getRegion_cat_node_link_Path(main_path,region))
+        #regLUT.rename(columns={'SUBCAT': 'ModelElement'}, inplace=True)
+
+        #REGCONTRIBUTIONDATAGRIDS[region] = {model: pd.DataFrame() for model in models}
+
+        for model in models:
+            print(model)
+
+            RawResult_fil_df = load_model_results(main_path,region,model + '_' + rc,'RawResults.csv')
+            #Rename Hillsope variations to just 'Hillsope' - this will make it easier when calulating Anthro loads
+            RawResult_fil_df.loc[(RawResult_fil_df['BudgetElement'] == 'Hillslope surface soil') | (RawResult_fil_df['BudgetElement'] == 'Hillslope sub-surface soil')| (RawResult_fil_df['BudgetElement'] == 'Hillslope no source distinction'), 'BudgetElement'] = 'Hillslope'
+
+            #Join the reg Cont table and the regions df
+            RawResult_fil_df = pd.merge(RawResult_fil_df, regLUT, on='ModelElement')
+
+            Regional_source_sink = pd.DataFrame(RawResult_fil_df.groupby(['Manag_Unit_48','Constituent','Process','BudgetElement']).agg({'Total_Load_in_Kg':'sum'})).reset_index()
+
+            Regional_source_sink = rename_constituents(Regional_source_sink)
+            result[region][model] = Regional_source_sink
+
+    return result
+
+
+def source_sink_by_basin(regions, models, constituents,core_constituents,regional_source_sinks):
+    result = {}
+    for region in regions:
+        print(region)
+
+        result[region] = {}
+
+        for model in models:
+            print(' ',model)
+
+            data = regional_source_sinks[region][model]
+        #data_summary_Budget = data.groupby(['SummaryRegion','Constituent','BudgetElement']).sum(numeric_only = True)
+            data_summary_Budget = data.groupby(['Manag_Unit_48','Constituent','BudgetElement']).sum(numeric_only = True)
+
+            basins = data_summary_Budget.index.levels[0]
+
+            result[region][model] = {}
+
+            for basin in basins:
+                print ('  ',basin)
+
+                result[region][model][basin] = {}
+                data_summary2_Budget = data_summary_Budget.loc[basin].T[constituents]
+                data_summary3_Budget = data_summary2_Budget.T
+
+
+                for con in core_constituents:
+                    print (con)
+
+                    df_temp = data_summary3_Budget.loc[con]
+
+                    required_elements = ['Hillslope', 'Gully', 'Undefined', 'Diffuse Dissolved', 'Seepage',
+                       'Leached', 'TimeSeries Contributed Seepage', 'Extraction','Node Loss', 'Leached','Residual Node Storage',
+                       'DWC Contributed Seepage', 'Link Yield', 'Link In Flow',
+                       'Residual Link Storage', 'Link Initial Load', 'Streambank',
+                       'Channel Remobilisation', 'Stream Deposition',
+                       'Reservoir Decay','Reservoir Deposition',
+                       'Flood Plain Deposition', 'Point Source', 'Stream Decay']
+
+
+                # Ensure all required elements are present in the DataFrame index
+                    for element in required_elements:
+                        if element not in df_temp.index:
+                        # Add the missing element with a Total_Load_in_Kg of 0
+                            df_temp.loc[element] = 0
+
+                    result[region][model][basin][con] = df_temp
+
+
+                    if con in ['TSS','PN','PP']:
+                    ### Supply
+                        result[region][model][basin][con] = pd.DataFrame(result[region][model][basin][con]).T
+
+                        if con =='TSS':
+                            if region in ['CY', 'BU', 'FI', 'BM']:
+                                result[region][model][basin][con]['Hillslope'] = result[region][model][basin][con]['Hillslope']
+                            else:
+                                result[region][model][basin][con]['Hillslope'] = result[region][model][basin][con]['Hillslope'] + \
+                                                                                         result[region][model][basin][con]['Undefined']
+
+
+                        elif con in ['PN','PP']:
+                            result[region][model][basin][con]['Hillslope'] = result[region][model][basin][con]['Hillslope'] + \
+                                                                                         result[region][model][basin][con]['Undefined']
+
+                        result[region][model][basin][con]['Streambank'] = result[region][model][basin][con]['Streambank']
+                        result[region][model][basin][con]['Gully'] = result[region][model][basin][con]['Gully']
+                        result[region][model][basin][con]['ChannelRemobilisation'] = result[region][model][basin][con]['Channel Remobilisation']
+
+                    ### loss
+                        result[region][model][basin][con]['Extraction + Other Minor Losses'] = result[region][model][basin][con]['Extraction'] + \
+                                                                                                           result[region][model][basin][con]['Node Loss'] + \
+                                                                                                           result[region][model][basin][con]['Residual Link Storage'] + \
+                                                                                                           result[region][model][basin][con]['Residual Node Storage']
+
+                        result[region][model][basin][con]['FloodPlainDeposition'] = result[region][model][basin][con]['Flood Plain Deposition']
+                        result[region][model][basin][con]['ReservoirDeposition'] = result[region][model][basin][con]['Reservoir Deposition']
+                        result[region][model][basin][con]['StreamDeposition'] = result[region][model][basin][con]['Stream Deposition']
+
+                        processes_of_interest = ['Hillslope','Streambank','Gully','ChannelRemobilisation',
+                                          'Extraction + Other Minor Losses','FloodPlainDeposition','ReservoirDeposition','StreamDeposition']
+
+                    elif con=='DIN':
+                    ### Supply
+                        result[region][model][basin][con] = pd.DataFrame(result[region][model][basin][con]).T
+
+                        if region in ['CY', 'BU', 'BM']:
+                            result[region][model][basin][con]['SurfaceRunoff'] = result[region][model][basin][con]['Diffuse Dissolved'] + \
+                                                                                             result[region][model][basin][con]['Hillslope']
+                        elif region == 'FI':
+                            result[region][model][basin][con]['SurfaceRunoff'] = result[region][model][basin][con]['Diffuse Dissolved']
+
+                        else:
+                            result[region][model][basin][con]['SurfaceRunoff'] = result[region][model][basin][con]['Undefined'] + \
+                                                                                             result[region][model][basin][con]['Diffuse Dissolved'] + \
+                                                                                             result[region][model][basin][con]['Hillslope']
+
+
+                        result[region][model][basin][con]['PointSource'] = result[region][model][basin][con]['Point Source']
+
+                        if 'Seepage' in result[region][model][basin][con].columns:
+                            result[region][model][basin][con]['Seepage'] = result[region][model][basin][con]['Seepage']
+                        else:
+                            result[region][model][basin][con]['Seepage'] = 0
+
+
+                    ### loss
+                        result[region][model][basin][con]['Extraction + Other Minor Losses'] = result[region][model][basin][con]['Extraction'] + \
+                                                                                                           result[region][model][basin][con]['Node Loss'] + \
+                                                                                                           result[region][model][basin][con]['Residual Link Storage'] + \
+                                                                                                           result[region][model][basin][con]['Residual Node Storage']
+
+
+                        processes_of_interest = ['SurfaceRunoff','Seepage','PointSource',
+                                          'Extraction + Other Minor Losses']
+
+                    result[region][model][basin][con] = result[region][model][basin][con][processes_of_interest].T
+    return result
+
+def source_sink_by_region(core_constituents,basin_source_sink):
+    result = {}
+    regions = basin_source_sink.keys()
+    for region in regions:
+        print(region)
+        result[region] = {}
+        for con in core_constituents:
+            print(' ',con)
+            base = basin_source_sink[region]['BASE']
+            basins = base.keys()
+
+            Region_sum = 0
+
+            for basin in basins:
+                print('  ',basin)
+                Region_sum = Region_sum + basin_source_sink[region]['BASE'][basin][con].fillna(0)
+                Region_sum
+
+                result[region][con] = Region_sum
+    return result
+
+def overall_source_sink_budget(regions,core_constituents,regional_source_sink):
+    result = {}
+
+    for con in core_constituents:
+        print(con)
+        overall_sum_process = 0
+
+        for region in regions:
+            # print(region)
+            overall_sum_process = overall_sum_process + regional_source_sink[region][con].fillna(0)
+            result[con] = overall_sum_process
+
+    return result
+
+def lu_area_by_region(main_path,regions,rc,fus):
+    result = {}
+
+    for region in regions:
+        print(region)
+
+        fuAreaTable = load_model_results(main_path,region,'BASE_'+rc,'fuAreasTable.csv')
+
+        fuArea_summary = fuAreaTable.groupby(['FU']).sum(numeric_only= True)
+        fuArea = fuArea_summary.T
+        #fuArea['Grazing'] = fuArea['Grazing Forested'] + fuArea['Grazing Open']
+        fuArea['Cropping'] = fuArea['Dryland Cropping'] + fuArea['Irrigated Cropping']
+        fuArea['Urban + Other'] = fuArea['Other'] + fuArea['Urban']
+        for fu in FILL_FUS:
+            if fu not in fuArea:
+                fuArea[fu] = np.nan
+
+        fuArea = fuArea
+        fuArea = fuArea[fus]
+        fuArea = fuArea.T
+
+        result[region] = fuArea
+
+    return result
+
+def stream_lengths(main_path,regions,region_names,rc):
+    result = []
+
+    for region in regions:
+        print(region)
+        parameterTable = load_model_results(main_path,region,'BASE_'+rc,'ParameterTable.csv')
+        # paramterTable_fil = modelResultsPrefix + REGIONs[REGIONs.index(region)] + '//Model_Outputs//'  + 'BASE' + '_' + RC + '//ParameterTable.csv'
+        # paramterTable = pd.read_csv(paramterTable_fil,header=0,usecols=[0,1,2,3,4,5,6])
+
+        lengths = pd.DataFrame(parameterTable[parameterTable['PARAMETER']=='Link Length']['VALUE'])
+        lengths['VALUE'] = pd.to_numeric(lengths.VALUE)
+        totalLength = lengths.sum()*c.M_TO_KM
+
+        result.append(totalLength)
+
+    result = pd.DataFrame(result)
+    result = result.T
+    result[OVERALL_REGION] = result.T.sum()
+    result = result.T
+    result.index = region_names
+    result = result.fillna(0).astype(int)
+    result.columns = ['Stream']
+    return result
+
+def fu_load_summary(output_path,regions,region_names,core_constituents,region_export_by_fu,years):
+    result = {}
+
+    for con in core_constituents[0:4]:
+        print(con)
+
+        con_results = pd.DataFrame([])
+
+        for region in regions:
+            print(' ',region)
+
+            if con == 'TSS':
+                scale = c.KG_TO_KTONS
+            else:
+                scale = c.KG_TO_TONS
+            FU_Load_summary_con_temp = pd.DataFrame(region_export_by_fu[region]['BASE'][con]).T*scale/years
+
+            con_results = pd.concat([con_results,pd.DataFrame(FU_Load_summary_con_temp)])
+
+        con_results = con_results.T
+        con_results[OVERALL_REGION] = con_results.T.sum()
+        con_results = con_results.T
+        con_results.index = region_names
+        con_results = con_results.fillna(0).round(2)
+
+        if con == 'TSS':
+            unit = 'kt/year'
+        else:
+            unit = 't/year'
+        con_results = con_results.rename(columns = lambda c: f'{c} ({unit})')
+        con_results.to_csv(os.path.join(output_path, OVERALL_REGION, 'summaryTables', 'totalLoads', f'totalLoadperYear_{con}.csv'))
+
+        result[con] = con_results
+    return result
+
+def fu_areal_load_summary(output_path,fu_load,fu_areas):
+    result = {}
+
+    for constituent,df in fu_load.items():
+        print(constituent)
+
+        # FU_Load_summary_con = FU_Load_summary[constituent]
+        if constituent == 'TSS':
+            scale = c.KTONS_TO_TONS
+        else:
+            scale = c.TONS_TO_KG
+
+        FU_arealLoad_summary_con = df.values*scale/fu_areas.values
+        FU_arealLoad_summary_con = pd.DataFrame(FU_arealLoad_summary_con)
+        FU_arealLoad_summary_con.index = df.index
+        FU_arealLoad_summary_con = FU_arealLoad_summary_con.fillna(0).round(3)
+
+        if constituent == 'TSS':
+            units = 't'
+        else:
+            units = 'kg'
+        # if df.columns[0].startswith('Banana'):
+        #     print('Before rename to include units/ha/yr')
+        #     print(df.columns)
+        # new_columns = [f'{col} ({units}/{base_unit(col)}/year)' for col in df.columns]
+        # TODO Must be a nicer way to handle this!
+        FU_arealLoad_summary_con.columns = [f'Banana ({units}/ha/year)', f'Conservation ({units}/ha/year)',f'Cropping ({units}/ha/year)',
+                                f'Dairy ({units}/ha/year)',f'Forestry ({units}/ha/year)',f'Grazing ({units}/ha/year)',f'Horticulture ({units}/ha/year)',
+                                f'Stream ({units}/km/year)',f'Sugarcane ({units}/ha/year)', f'Urban + Other ({units}/ha/year)']
+
+
+        FU_arealLoad_summary_con.to_csv(os.path.join(output_path, OVERALL_REGION, 'summaryTables', 'arealLoads', f'arealLoadperYear_{constituent}.csv'))
+
+        result[constituent] = FU_arealLoad_summary_con
+    return result
+
+def plot_export_contribution_by_region(output_path,fu_load_summary,constituents):
+    for con in constituents:
+        plt.clf()
+        summaryExport_overall = fu_load_summary[con].T.sum()[:-1]
+
+        ax = summaryExport_overall.plot.pie(**STANDARD_PIE_OPTIONS)
+
+        percent = 100.*summaryExport_overall.values/summaryExport_overall.values.sum()
+        labels = ['{0} - {1:1.1f} %'.format(i,j) for i,j in zip(summaryExport_overall.index, percent)]
+
+        ax.legend(labels, bbox_to_anchor=(0.95,0.61),ncol=1,fontsize=14)
+        ax.set(ylabel='')
+        dest = Path(output_path) / OVERALL_REGION / 'variousExports'
+        dest.mkdir(parents=True, exist_ok=True)
+        save_figure(dest / ('exportContributionByRegion_' + con + '.png'))
+
+def plot_tss_tonnages(output_path,fu_load_summary,fu_area_summary,constituent='TSS'):
+    PROs = ['Grazing','Stream']
+
+    for p in PROs:
+        print(p)
+
+        plt.clf()
+
+        if p == 'Grazing':
+            pro_load = 'Grazing (kt/year)'
+            pro_area = 'Grazing (ha)'
+        elif p == 'Stream':
+            pro_load = 'Stream (kt/year)'
+            pro_area = 'Stream (km)'
+
+        if constituent == 'TSS':
+            scale = c.KTONS_TO_TONS
+        else:
+            scale = c.TONS_TO_KG
+        ArealRegionLoad = fu_load_summary[constituent][pro_load].T*scale/fu_area_summary[pro_area]
+
+        #print (ArealRegionLoad)
+
+        ax1 = fu_load_summary[constituent][pro_load].T.plot(kind='bar',color='m',width=0.4,grid="off",edgecolor='black')
+        ax1.set_xlabel('')
+        ax1.grid(False)
+
+
+        ax2 = ax1.twinx()
+        ax2 = ArealRegionLoad.plot(kind='bar',color='g',width=0.15,grid="off",edgecolor='black')
+        ax2.set_xlabel('')
+        ax2.grid(False)
+
+        if constituent == 'Flow':
+            ax1.set_ylabel(constituent + ' (GL/yr OR ML/yr ???)',size=8)
+            ax1.legend(['kt/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+            ax2.set_ylabel(constituent + ' (GL/yr OR ML/yr ???)',size=8)
+            ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+        elif constituent == 'TSS':
+            ax1.set_ylabel(constituent + ' (kt/yr)',size=8)
+            ax1.legend(['kt/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+            if p == 'Grazing':
+                ax2.set_ylabel(constituent + ' (t/ha/yr)',size=8)
+                ax2.legend(['t/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+            else:
+                ax2.set_ylabel(constituent + ' (t/km/yr)',size=8)
+                ax2.legend(['t/km/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+        elif constituent in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+            ax1.set_ylabel(constituent + ' (t/yr)',size=8)
+            ax1.legend(['t/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+            ax2.set_ylabel(constituent + ' (kg/ha/yr)',size=8)
+            ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+        else:
+            ax1.set_ylabel(constituent + ' (kg/yr)',size=8)
+            ax1.legend(['kg/yr'],loc='lower left',bbox_to_anchor=(0.05,1.0),fontsize=8)
+            ax2.set_ylabel(constituent + ' (kg/ha/yr)',size=8)
+            ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+
+        save_figure(os.path.join(output_path,OVERALL_REGION,'variousExports', constituent + '_exportTonnageArealsbyRegion_' + p + '.png'))
+
+def plot_sugarcane_tonnages(output_path,fu_load_summary,fu_area_summary,constituent='DIN'):
+    PROs = ['Sugarcane']
+
+    for p in PROs:
+        print(p)
+
+        print(constituent)
+
+        plt.clf()
+
+        if p == 'Sugarcane':
+            pro_load = 'Sugarcane (t/year)'
+            pro_area = 'Sugarcane (ha)'
+        else:
+            pro_load = None
+            pro_area = None
+
+        if constituent == 'DIN':
+            scale = c.KTONS_TO_TONS
+        else:
+            scale = c.TONS_TO_KG
+        ArealRegionLoad = fu_load_summary[constituent][pro_load].T*scale/fu_area_summary[pro_area]
+
+        #print (ArealRegionLoad)
+
+        ax1 = fu_load_summary[constituent][pro_load].T.plot(kind='bar',color='m',width=0.4,grid="off",edgecolor='black')
+        ax1.set_xlabel('')
+        ax1.grid(False)
+
+        ax2 = ax1.twinx()
+        ax2 = ArealRegionLoad.plot(kind='bar',color='g',width=0.15,grid="off",edgecolor='black')
+        ax2.set_xlabel('')
+        ax2.grid(False)
+
+        if constituent == 'Flow':
+            ax1.set_ylabel(constituent  + ' (GL/yr OR ML/yr ???)',size=8)
+            ax1.legend(['kt/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+            ax2.set_ylabel(constituent + ' (GL/yr OR ML/yr ???)',size=8)
+            ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+        elif constituent == 'TSS':
+            ax1.set_ylabel(constituent + ' (kt/yr)',size=8)
+            ax1.legend(['kt/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+            if p == 'Grazing':
+                ax2.set_ylabel(constituent + ' (t/ha/yr)',size=8)
+                ax2.legend(['t/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+            else:
+                ax2.set_ylabel(constituent + ' (t/km/yr)',size=8)
+                ax2.legend(['t/km/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+        elif constituent in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+            ax1.set_ylabel(constituent + ' (t/yr)',size=8)
+            ax1.legend(['t/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+            ax2.set_ylabel(constituent + ' (kg/ha/yr)',size=8)
+            ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+        else:
+            ax1.set_ylabel(constituent + ' (kg/yr)',size=8)
+            ax1.legend(['kg/yr'],loc='lower left',bbox_to_anchor=(0.05,1.0),fontsize=8)
+            ax2.set_ylabel(constituent + ' (kg/ha/yr)',size=8)
+            ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+
+        save_figure(os.path.join(output_path,OVERALL_REGION,'variousExports', constituent + '_exportTonnageArealsbyRegion_' + p + '.png'))
+
+
+
+def plot_process_contributions(output_path,regions,contituents,basin_export_by_process,years,show_plot=True,save_plot=True, basin_renames=None):
+    if basin_renames is None:
+        basin_renames = {}
+    ### Process based contribution plotting - both Tonnage and % CONTRIBUTION for TSS, PN, PP, & DIN
+    ### ONLY the Base model is considered
+    # was_interactive = plt.isinteractive()
+    # if show_plot and not was_interactive:
+    #     plt.ion()
+    # elif not show_plot and was_interactive:
+    #     plt.ioff()
+
+    for con in contituents:
+        print(con)
+
+        basins_list = pd.DataFrame([])
+        basins_process_summary = pd.DataFrame([])
+
+        def deal_with_plot(region,plot_prefix,csv_prefix=None,csv_data=None):
+            if show_plot:
+                plt.show()
+            if save_plot:
+                save_figure(os.path.join(output_path, region, 'processBasedExports', plot_prefix+'_' + con + '.png'))   
+                if csv_prefix is not None and csv_data is not None:
+                    csv_data.to_csv(os.path.join(output_path, region, 'variousTables', csv_prefix + '_' + con + '.csv'))
+
+        for region in regions:
+            print('  ',region)
+
+            base = basin_export_by_process[region]['BASE']
+
+            basins = base.keys()
+
+            basin_process_summary = []
+            basin_list = []
+
+            for basin in basins:
+                print('    ',basin)
+
+                basin_list.append(basin)
+                basin_process_summary.append(base[basin][con]['LoadToRegExport (kg)']/years)
+
+            if con == 'TSS':
+                scale = c.KG_TO_KTONS
+            elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+                scale = c.KG_TO_TONS
+            else:
+                scale = 1.0
+            basin_process_summary = pd.DataFrame(basin_process_summary)*scale
+
+            basins_list = pd.concat([basins_list,pd.DataFrame(basin_list)])
+            basins_process_summary = pd.concat([basins_process_summary,basin_process_summary])
+
+            basin_list = pd.DataFrame(basin_list)
+            #basin_list.columns = ['Region Basin']
+            basin_list.columns = ['Management Units']
+            #print(basin_list)
+
+            processSummary_Region = basin_process_summary.copy()
+
+            basin_list['Management Units'] = basin_list['Management Units'].replace(basin_renames)
+            if region == 'WT':
+                processSummary_Region['Management Units'] = basin_list['Management Units'].values
+            # #     # Set 'Management Units' as the index
+                processSummary_Region = processSummary_Region.reset_index(drop=True)  # Reset the index (remove 'Process')
+                processSummary_Region = processSummary_Region.set_index('Management Units')
+                #processSummary_Region = processSummary_Region.reindex(['Daintree', 'Mossman', 'Barron', 'Mulgrave-Russell', 'Johnstone', 'Tully', 'Murray', 'Lower Herbert', 'Upper Herbert'])
+            else:
+                processSummary_Region['Management Units'] = basin_list['Management Units'].values
+            # #     # Set 'Management Units' as the index
+                processSummary_Region = processSummary_Region.reset_index(drop=True)  # Reset the index (remove 'Process')
+                processSummary_Region = processSummary_Region.rename_axis(None, axis=1)
+                processSummary_Region = processSummary_Region.set_index('Management Units')
+
+            # b = processSummary_Region.T
+
+            # processSummary_Region = b.T
+            processSummary_Region = processSummary_Region[::-1]
+
+            processSummary_Region['total'] = processSummary_Region.sum(axis=1)
+            percent_region = processSummary_Region.div(processSummary_Region.total, axis='index') * 100
+            percent_region
+
+            #########################################
+            ### process based tonnage contribution ##
+            #########################################
+
+            axx = processSummary_Region.T[0:-1].T.plot(kind='barh',fontsize = 14, stacked=True,color=['green','blue','pink','cyan'],edgecolor='black')
+
+            if con == 'Flow':
+                axx.set_xlabel(con + ' (GL/yr OR ML/yr ???)',size=12)
+            elif con == 'TSS':
+                axx.set_xlabel(con + ' Load (kt/yr)',size=12)
+            elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+                axx.set_xlabel(con + ' Load (t/yr)',size=12)
+            else:
+                axx.set_xlabel(con + ' Load (kg/yr)',size=12)
+
+            axx.set_ylabel('', size=14)
+
+            fig = plt.gcf()
+            fig.subplots_adjust(bottom=0.1,left=0.06,top=2.945,right=0.99)
+            #axx = fig.add_subplot(111)
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.04),fancybox=True, shadow=True, ncol=4, fontsize = 12)
+            deal_with_plot(region,'processTonnage')
+
+            ########################################
+            ###### process based % contribution #####
+            ########################################
+
+            axx = percent_region.T[0:-1].T.plot(kind='barh',fontsize = 14, stacked=True,color=['green','blue','pink','cyan'],edgecolor='black')
+            axx.set_xlim([0,100])
+
+            axx.set_xlabel(con + ' Load Contribution (%)',size=12)
+
+            axx.set_ylabel('', size=14)
+
+            axx.get_xaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
+
+            fig = plt.gcf()
+            fig.subplots_adjust(bottom=0.1,left=0.06,top=2.945,right=0.99)
+            # axx = fig.add_subplot(111)
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.04),fancybox=True, shadow=True, ncol=4, fontsize = 12)
+
+            deal_with_plot(region,'processPercent')
+
+
+        basins_list.columns = [f'{OVERALL_REGION} Management Units']
+        basins_list[f'{OVERALL_REGION} Management Units'] = basins_list[f'{OVERALL_REGION} Management Units'].replace(basin_renames)
+
+        processSummary = basins_process_summary.copy()
+
+        processSummary[f'{OVERALL_REGION} Management Units'] = basins_list[f'{OVERALL_REGION} Management Units'].values
+        #
+        processSummary = processSummary.reset_index(drop=True)  # Reset the index (remove 'Process')
+        processSummary = processSummary.rename_axis(None, axis=1)
+        processSummary = processSummary.set_index(f'{OVERALL_REGION} Management Units')
+
+        a = processSummary.T
+        # a.insert(loc = 7 , column = '', value = 0)
+        # a.insert(loc = 16 , column = ' ', value = 0)
+        # a.insert(loc = 22 , column = '  ', value = 0)
+        # a.insert(loc = 27 , column = '   ', value = 0)
+        # a.insert(loc = 34 , column = '    ', value = 0)
+
+
+        a.insert(loc = 7 , column = '', value = 0)
+        a.insert(loc = 17 , column = ' ', value = 0)
+        a.insert(loc = 29 , column = '  ', value = 0)
+        a.insert(loc = 34 , column = '   ', value = 0)
+        a.insert(loc = 47 , column = '    ', value = 0)
+
+        processSummary = a.T
+        processSummary = processSummary[::-1]
+
+        if con == 'TSS':
+            processSummary['export(kt)/year'] = processSummary.sum(axis=1)
+        elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+            processSummary['export(t)/year'] = processSummary.sum(axis=1)
+        else:
+            processSummary['export(kg)/year'] = processSummary.sum(axis=1)
+
+
+        ### estimate % contribution
+        if con == 'TSS':
+            percent = processSummary.div(processSummary['export(kt)/year'], axis='index') * 100
+        elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+            percent = processSummary.div(processSummary['export(t)/year'], axis='index') * 100
+        else:
+            percent = processSummary.div(processSummary['export(kg)/year'], axis='index') * 100
+
+        percent
+
+        #########################################
+        ### process based tonnage contribution ##
+        #########################################
+        axx = processSummary.T[0:-1].T.plot(kind='barh',fontsize = 10, stacked=True,color=['green','blue','pink','cyan'],edgecolor='black')
+
+        if con == 'Flow':
+            axx.set_xlabel(con + ' (GL/yr OR ML/yr ???)',size=12)
+        elif con == 'TSS':
+            axx.set_xlabel(con + ' Load (kt/yr)',size=12)
+        elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+            axx.set_xlabel(con + ' Load (t/yr)',size=12)
+        else:
+            axx.set_xlabel(con + ' Load (kg/yr)',size=12)
+
+        def setup_axis(ax):
+            ax.set_ylabel('', size=14)
+
+            ax.get_xaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
+
+            ax.text(ax.get_xlim()[1]*-0.27, 46.5, "Cape York", size=12,rotation=90, weight="bold")
+            ax.text(ax.get_xlim()[1]*-0.27, 37.75, "Wet Tropics", size=12,rotation=90, weight="bold")
+            ax.text(ax.get_xlim()[1]*-0.27, 27.75, "Burdekin", size=12,rotation=90, weight="bold")
+            ax.text(ax.get_xlim()[1]*-0.27, 18.5, '    Mackay \n Whitsunday', size=12,rotation=90, weight="bold")
+            ax.text(ax.get_xlim()[1]*-0.27, 12.25, "Fitzroy", size=12,rotation=90, weight="bold")
+            ax.text(ax.get_xlim()[1]*-0.27, 0.25, "Burnett Mary", size=12,rotation=90, weight="bold")
+
+            ax.axhline(y=45, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+            ax.axhline(y=35, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+            ax.axhline(y=23, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+            ax.axhline(y=18, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+            ax.axhline(y=5, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+        setup_axis(axx)
+
+        fig = plt.gcf()
+        fig.subplots_adjust(bottom=0.1,left=0.06,top=2.945,right=0.99)
+        #axx = fig.add_subplot(111)
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.04),fancybox=True, shadow=True, ncol=4, fontsize = 10)
+
+        deal_with_plot(OVERALL_REGION,'processTonnage','exportTonnage',pd.DataFrame(processSummary[::-1].iloc[:,-1]))
+
+
+    # #     clf()
+
+    #     #########################################
+    #     ###### process based % contribution #####
+    #     #########################################
+
+        axx = percent.T[0:-1].T.plot(kind='barh',fontsize = 10, stacked=True,color=['green','blue','pink','cyan'],edgecolor='black')
+        axx.set_xlim([0,100])
+
+        axx.set_xlabel(con + ' Load Contribution (%)',size=12)
+
+        setup_axis(axx)
+
+        fig = plt.gcf()
+        fig.subplots_adjust(bottom=0.1,left=0.06,top=2.945,right=0.99)
+        #axx = fig.add_subplot(111)
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.04),fancybox=True, shadow=True, ncol=4, fontsize = 10)
+
+        deal_with_plot(OVERALL_REGION,'processPercent')
+
+
+def plot_land_use_exports(output_path,regions,constituents,region_export_by_fu,region_fu_area,overall_export_by_fu,years):
+    for region in regions:
+        print(region)
+
+        RegionLoad = region_export_by_fu[region]
+        RegionLoad = RegionLoad['BASE'][constituents]
+        unit_conversions = [c.KG_TO_KTONS,c.KG_TO_TONS,c.KG_TO_TONS,c.KG_TO_TONS,c.KG_TO_TONS,c.KG_TO_TONS,c.KG_TO_TONS][:len(constituents)]
+        RegionLoad_export = RegionLoad*unit_conversions/years #unit conversion
+        RegionFUArea = region_fu_area[region]
+        RegionFUArea = RegionFUArea*c.M2_TO_HA  #unit conversion
+
+        for con in constituents:
+            print(con)
+
+            plt.clf()
+
+            if con == 'TSS':
+                ArealRegionLoad = RegionLoad[con]*c.KG_TO_TONS/RegionFUArea['Area']/years
+            else:
+                ArealRegionLoad = RegionLoad[con]/RegionFUArea['Area']/years
+
+            #print (ArealRegionLoad)
+
+            ax1 = RegionLoad_export[con].plot(kind='bar',color='m',width=0.4,grid="off",edgecolor='black')
+            ax1.set_xlabel('')
+            ax1.grid(False)
+
+            ax2 = ax1.twinx()
+            ax2 = ArealRegionLoad.plot(kind='bar',color='g',width=0.15,grid="off",edgecolor='black')
+            ax2.set_xlabel('')
+            ax2.grid(False)
+
+
+            if con == 'Flow':
+                ax1.set_ylabel(con + ' (GL/yr OR ML/yr ???)',size=8)
+                ax1.legend(['kt/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+                ax2.set_ylabel(con + ' (GL/yr OR ML/yr ???)',size=8)
+                ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+            elif con == 'TSS':
+                ax1.set_ylabel(con + ' (kt/yr)',size=8)
+                ax1.legend(['kt/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+                ax2.set_ylabel(con + ' (t/ha/yr)',size=8)
+                ax2.legend(['t/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+            elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+                ax1.set_ylabel(con + ' (t/yr)',size=8)
+                ax1.legend(['t/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+                ax2.set_ylabel(con + ' (kg/ha/yr)',size=8)
+                ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+            else:
+                ax1.set_ylabel(con + ' (kg/yr)',size=8)
+                ax1.legend(['kg/yr'],loc='lower left',bbox_to_anchor=(0.05,1.0),fontsize=8)
+                ax2.set_ylabel(con + ' (kg/ha/yr)',size=8)
+                ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+
+            save_figure(os.path.join(output_path,region,'landuseBasedExports',con + '_exportTonnageArealsbyLanduse.png'))
+
+
+            ### Estimating and Plotting TSS, PN, PP, DIN Contribution by Landuse
+
+            contribution = RegionLoad[constituents]
+            contribution = contribution/contribution.sum()*100
+
+            print(contribution)
+
+            ax3 = contribution.T.plot(kind='bar',width=0.6,grid="off",color=FU_COLORS)
+
+            ax3.legend(bbox_to_anchor=(1,1),fontsize=6.4,ncol=5)
+            ax3.set_ylim(0,100)
+            ax3.set_ylabel("Percent Contribution",size=8)
+            ax3.set_xticklabels(['TSS','PN','PP','DIN'],rotation='horizontal')
+            ax3.set_xlabel('')
+
+
+            print(contribution)
+
+            save_figure(os.path.join(output_path,region,'landuseBasedExports','exportPercentByLanduse.png'))
+
+    for con in constituents:
+        plt.clf()
+        colors = FU_COLORS
+
+        ax = overall_export_by_fu['BASE'][con].plot.pie(colors=colors,**STANDARD_PIE_OPTIONS)
+
+        percent = 100.*overall_export_by_fu['BASE'][con].values/overall_export_by_fu['BASE'][con].values.sum()
+        labels = ['{0} - {1:1.1f} %'.format(i,j) for i,j in zip(overall_export_by_fu['BASE'].index, percent)]
+
+
+        ax.legend(labels, bbox_to_anchor=(0.95,0.67),ncol=1,fontsize=14)  #(1,1.1)
+        ax.set(ylabel='')
+
+        save_figure(os.path.join(output_path,OVERALL_REGION,'variousExports','exportContributionByLanduse_' + con + '.png'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# migrated by copilot
+def collate_measured_annual_regions(region_list, gbrclmp_file, site_list):
+    measured_annual_regions = {region: {} for region in region_list}
+    gbrclmp_data = pd.read_csv(gbrclmp_file, header=0)
+    for region in region_list:
+        sites_of_interest = site_list[site_list['NRM_short'] == region]['Station']
+        measured_sites = sites_of_interest
+        measured_annual_sites = {}
+        for site in measured_sites:
+            columns = ['RepresentivityRating', 'Flow', 'TSS', 'TN', 'PN', 'NOX', 'NH4', 'DIN', 'DON', 'TP', 'PP', 'DIP', 'DOP']
+            annual_load_temp = gbrclmp_data[gbrclmp_data['Site Code'] == site]
+            annual_load_temp = annual_load_temp.set_index(['Year'])
+            annual_load_temp = annual_load_temp[columns]
+            measured_annual_sites[site] = pd.DataFrame(annual_load_temp)
+        measured_annual_regions[region] = measured_annual_sites
+    return measured_annual_regions
+
+# migrated by copilot
+def build_annual_comparison_by_quality(region_list, measured_annual_regions, site_list, paras_compare, constituent_names):
+    logger.warning('build_annual_comparison_by_quality may not work as intended')
+    quality = ['yes', 'no']
+    summary_annual_regions_quality = {q: {} for q in quality}
+    for q in quality:
+        result_df_annual = pd.DataFrame()
+        summary_annual_regions = {region: pd.DataFrame() for region in region_list}
+        for region in region_list:
+            measured_sites = site_list[site_list['NRM_short'] == region]['Station'].tolist()
+            modelled_sites = site_list[site_list['NRM_short'] == region]['Name_in_Source'].tolist()
+            for idx, con in enumerate(paras_compare):
+                for idx_site, site in enumerate(measured_sites):
+                    Node_in_source = modelled_sites[idx_site]
+                    site_monitoring_data = measured_annual_regions[region][site].reset_index()
+                    site_monitoring_data['Node'] = site
+                    if con == 'Flows':
+                        site_monitoring_data_TS = site_monitoring_data[['Node', 'Year', 'RepresentivityRating', 'Flow']]
+                    else:
+                        site_monitoring_data_TS = site_monitoring_data[['Node', 'Year', 'RepresentivityRating', constituent_names[idx]]]
+                    if q == 'yes':
+                        site_monitoring_data_TS = filter_for_good_quality_observations(site_monitoring_data_TS, copy=True)
+                        if site_monitoring_data_TS['Year'].count() < 3:
+                            continue
+                    site_monitoring_data_TS = site_monitoring_data_TS.copy()
+                    column_mapping = {
+                        'Node': 'Site',
+                        'Year': 'Year',
+                        'RepresentivityRating': 'RepresentivityRating',
+                        site_monitoring_data_TS.columns[3]: 'Monitored'
+                    }
+                    site_monitoring_data_TS.rename(columns=column_mapping, inplace=True)
+                    site_monitoring_data_TS['Monitored'] = round(site_monitoring_data_TS['Monitored'], 1)
+                    # Modelled data loading and processing would go here (if needed for comparison)
+                    # Append to result
+                    result_df_annual = pd.concat([result_df_annual, site_monitoring_data_TS], ignore_index=True)
+            summary_annual_regions[region] = result_df_annual
+        summary_annual_regions_quality[q] = summary_annual_regions
+    return summary_annual_regions_quality
+
+# migrated by copilot
+def collate_modelled_annual_regions(main_path,region_list,site_list,comparison_run):
+    paras_compare = ['Sediment - Fine','N_Particulate','N_DIN','N_DON','P_Particulate','P_FRP','P_DOP','Flows']
+    paras_compare_suffixes = ['_cubicmetrespersecond','_kilograms']
+    modelled_daily_regions = {region: {} for region in region_list}
+    modelled_annual_regions = {region: {} for region in region_list}
+    model_results_prefix = model_results_dir(main_path)
+    def water_year(date_string):
+        y, m, d = [int(c) for c in date_string.split('-')]
+        if m <= 6:
+            return f'{y-1}-{y}'
+        return f'{y}-{y+1}'
+    for region in region_list:
+        measured_sites = site_list[site_list['NRM_short'] == region]['Station'].tolist()
+        modelled_sites = site_list[site_list['NRM_short'] == region]['Name_in_Source'].tolist()
+        modelled_daily_sites = {site: pd.DataFrame() for site in measured_sites}
+        modelled_annual_sites = {site: pd.DataFrame() for site in measured_sites}
+        for site in modelled_sites:
+            # Build file paths
+            TSS_fil =  os.path.join(model_results_prefix,region,'Model_Outputs',comparison_run,'TimeSeries',paras_compare[0],f"{paras_compare[0]}_{site}{paras_compare_suffixes[1]}.csv")
+            PN_fil =   os.path.join(model_results_prefix,region,'Model_Outputs',comparison_run,'TimeSeries',paras_compare[1],f"{paras_compare[1]}_{site}{paras_compare_suffixes[1]}.csv")
+            DIN_fil =  os.path.join(model_results_prefix,region,'Model_Outputs',comparison_run,'TimeSeries',paras_compare[2],f"{paras_compare[2]}_{site}{paras_compare_suffixes[1]}.csv")
+            DON_fil =  os.path.join(model_results_prefix,region,'Model_Outputs',comparison_run,'TimeSeries',paras_compare[3],f"{paras_compare[3]}_{site}{paras_compare_suffixes[1]}.csv")
+            PP_fil =   os.path.join(model_results_prefix,region,'Model_Outputs',comparison_run,'TimeSeries',paras_compare[4],f"{paras_compare[4]}_{site}{paras_compare_suffixes[1]}.csv")
+            DIP_fil =  os.path.join(model_results_prefix,region,'Model_Outputs',comparison_run,'TimeSeries',paras_compare[5],f"{paras_compare[5]}_{site}{paras_compare_suffixes[1]}.csv")
+            DOP_fil =  os.path.join(model_results_prefix,region,'Model_Outputs',comparison_run,'TimeSeries',paras_compare[6],f"{paras_compare[6]}_{site}{paras_compare_suffixes[1]}.csv")
+            Flow_fil = os.path.join(model_results_prefix,region,'Model_Outputs',comparison_run,'TimeSeries',paras_compare[7],f"Flow_{site}{paras_compare_suffixes[0]}.csv")
+            # Read CSVs
+            TSS = pd.read_csv(TSS_fil, header=0)
+            PN = pd.read_csv(PN_fil, header=0)
+            PP = pd.read_csv(PP_fil, header=0)
+            DIN = pd.read_csv(DIN_fil, header=0)
+            DON = pd.read_csv(DON_fil, header=0)
+            DIP = pd.read_csv(DIP_fil, header=0)
+            DOP = pd.read_csv(DOP_fil, header=0)
+            Flow = pd.read_csv(Flow_fil, header=0)
+            # Assign variables
+            Date = np.array(Flow['Date'])
+            Flow_arr = np.array(Flow[Flow.columns[1]]) * c.CUMECS_TO_ML_DAY
+            TSS_arr = np.array(TSS[TSS.columns[1]]) * c.KG_TO_TONS
+            PN_arr = np.array(PN[PN.columns[1]]) * c.KG_TO_TONS
+            PP_arr = np.array(PP[PP.columns[1]]) * c.KG_TO_TONS
+            DIN_arr = np.array(DIN[DIN.columns[1]]) * c.KG_TO_TONS
+            DON_arr = np.array(DON[DON.columns[1]]) * c.KG_TO_TONS
+            DIP_arr = np.array(DIP[DIP.columns[1]]) * c.KG_TO_TONS
+            DOP_arr = np.array(DOP[DOP.columns[1]]) * c.KG_TO_TONS
+            # Combine all daily parameters
+            modelled_daily = np.array([Date, Flow_arr, TSS_arr, PN_arr, DIN_arr, DON_arr, PP_arr, DIP_arr, DOP_arr]).T
+            modelled_daily = pd.DataFrame(modelled_daily, columns=['Date', 'Flow', 'TSS', 'PN', 'DIN', 'DON', 'PP', 'DIP', 'DOP'])
+            modelled_daily = modelled_daily.set_index(['Date'])
+            # Insert TN & TP
+            modelled_daily.insert(loc=2, column='TN', value=modelled_daily['PN'] + modelled_daily['DIN'] + modelled_daily['DON'])
+            modelled_daily.insert(loc=6, column='TP', value=modelled_daily['PP'] + modelled_daily['DIP'] + modelled_daily['DOP'])
+            # Water years
+            water_years = modelled_daily.index.map(water_year)
+            modelled_annual = modelled_daily.groupby(water_years).sum()
+            measured_site_name = measured_sites[list(modelled_sites).index(site)]
+            modelled_daily_sites[measured_site_name] = modelled_daily
+            modelled_annual_sites[measured_site_name] = modelled_annual
+        modelled_daily_regions[region] = modelled_daily_sites
+        modelled_annual_regions[region] = modelled_annual_sites
+    return modelled_daily_regions, modelled_annual_regions
+
+def compute_predev_vs_anthropogenic(basin_load_to_reg_export_fu, region, constituent,years):
+    predev = basin_load_to_reg_export_fu[region]['PREDEV']
+    base = basin_load_to_reg_export_fu[region]['BASE']
+    basins = base.keys()
+    basin_list = []
+    basin_predev_summary = []
+    basin_base_summary = []
+    basin_anthro_summary = []
+    for basin in basins:
+        basin_list.append(basin)
+        basin_predev_summary.append(predev[basin][constituent].sum()/years)
+        basin_base_summary.append(base[basin][constituent].sum()/years)
+        basin_anthro_summary.append(base[basin][constituent].sum()/years - predev[basin][constituent].sum()/years)
+    basin_list = pd.DataFrame(basin_list, columns=['basins'])
+
+    # Unit conversion
+    basin_predev_summary = pd.DataFrame(basin_predev_summary)
+    basin_base_summary = pd.DataFrame(basin_base_summary)
+    basin_anthro_summary = pd.DataFrame(basin_anthro_summary)
+
+    anthro_vs_predev = pd.concat([basin_predev_summary, basin_anthro_summary], axis=1)
+    anthro_vs_predev.columns = ['Predevelopment', 'Anthropogenic']
+    anthro_vs_predev.index = basin_list['basins']
+    predev_vs_base_vs_change = pd.concat([basin_predev_summary, basin_base_summary], axis=1)
+    predev_vs_base_vs_change.columns = ['Pre-development', 'Base']
+    predev_vs_base_vs_change.index = basin_list['basins']
+    total = pd.DataFrame(predev_vs_base_vs_change.sum())#.T
+    # print(total)
+    total.columns = ['Total']
+    predev_vs_base_vs_change = pd.concat([predev_vs_base_vs_change, total.T], ignore_index=False)
+    return anthro_vs_predev, predev_vs_base_vs_change
+
+def compute_anthropogenic_summary(basin_load_to_reg_export_fu,regions,constituents,years):
+    results = {}
+    for con in constituents:
+        results[con] = {}
+        for region in regions:
+            contributions, totals = compute_predev_vs_anthropogenic(basin_load_to_reg_export_fu, region, con,years)
+            results[con][region] = {
+                'contributions': contributions,
+                'totals': totals
+            }
+    return results
+
+# migrated by copilot
+def plot_predev_vs_anthropogenic(
+    output_path,
+    regions,
+    constituents,
+    basin_load_to_reg_export_fu,
+    years,
+    region_labels
+):
+    results = {}
+    for con in constituents:
+        scale = 1.0
+        if con == 'Flow':
+            scale = c.M3_TO_ML
+        elif con == 'TSS':
+            scale = c.KG_TO_KTONS
+        elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+            scale = c.KG_TO_TONS
+
+        anthros_vs_predevs = pd.DataFrame([])
+        predev_vs_base_vs_change_summary = pd.DataFrame([])
+        for region in regions:
+            contributions, totals = compute_predev_vs_anthropogenic(basin_load_to_reg_export_fu, region, con,years)
+            contributions = contributions * scale
+            totals = totals * scale
+            # Reindex for region
+            # ...region-specific reindexing logic can be added here if needed...
+            ax = contributions.plot(kind='bar', fontsize=10, stacked=True, color=['dodgerblue', 'darkorange'], edgecolor='black')
+            if con == 'Flow':
+                ax.set_ylabel(con + ' (GL/yr OR ML/yr ???)', size=12)
+            elif con == 'TSS':
+                ax.set_ylabel(con + ' Load (kt/yr)', size=12)
+            elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+                ax.set_ylabel(con + ' Load (t/yr)', size=12)
+            else:
+                ax.set_ylabel(con + ' Load (kg/yr)', size=12)
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.125), fancybox=True, ncol=2, fontsize=11)
+            ax.set_xlabel('')
+            fig = plt.gcf()
+            fig.subplots_adjust(bottom=0.1, left=0.06, top=2.945, right=0.99)
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.04), fancybox=True, shadow=True, ncol=2, fontsize=11)
+            save_figure(os.path.join(output_path, region, "predevAnthropogenicExports", f"predevAnthropogenicExports_{con}.png"))
+            anthros_vs_predevs = pd.concat([anthros_vs_predevs, contributions])
+            predev_vs_base_vs_change_summary = pd.concat([predev_vs_base_vs_change_summary, totals])
+        # Add summary columns
+        predev_vs_base_vs_change_summary.insert(loc=2, column='Anthropogenic', value=predev_vs_base_vs_change_summary['Base'] - predev_vs_base_vs_change_summary['Pre-development'])
+        predev_vs_base_vs_change_summary.insert(loc=3, column='Increase Factor', value=predev_vs_base_vs_change_summary['Anthropogenic'] / predev_vs_base_vs_change_summary['Pre-development'])
+        predev_vs_base_vs_change_summary.round({"Pre-development": 0, "Base": 0, "Anthropogenic": 0, "Increase Factor": 2})
+        # Save summary CSV
+        predev_vs_base_vs_change_summary.to_csv(os.path.join(output_path, region_labels[-1], "variousTables", f"predevVSbaseVSchange_summary_{con}.csv"))
+        results[con] = {
+            'anthros_vs_predevs': anthros_vs_predevs,
+            'predev_vs_base_vs_change_summary': predev_vs_base_vs_change_summary
+        }
+
+        a = anthros_vs_predevs.T
+        a.insert(loc = 7 , column = '', value = 0)
+        a.insert(loc = 17 , column = ' ', value = 0)
+        a.insert(loc = 29 , column = '  ', value = 0)
+        a.insert(loc = 34 , column = '   ', value = 0)
+        a.insert(loc = 47 , column = '    ', value = 0)
+        anthros_vs_predevs = a.T
+        anthros_vs_predevs = anthros_vs_predevs[::-1]
+
+        axx = anthros_vs_predevs.plot(kind='barh',fontsize = 10, stacked=True,color=['dodgerblue','darkorange'],edgecolor='black')
+
+        if con == 'Flow':            
+            axx.set_xlabel(con + ' (GL/yr OR ML/yr ???)',size=12)
+        elif con == 'TSS':
+            axx.set_xlabel(con + ' Load (kt/yr)',size=12)
+        elif con in ['DIN', 'DON', 'PN', 'DOP', 'DIP', 'PP']:
+            axx.set_xlabel(con + ' Load (t/yr)',size=12)
+        else:
+            axx.set_xlabel(con + ' Load (kg/yr)',size=12)
+            
+        axx.set_ylabel('', size=14)
+                    
+        axx.get_xaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
+
+        axx.text(axx.get_xlim()[1]*0.67, 46.5,  region_labels[0], size=12)
+        axx.text(axx.get_xlim()[1]*0.67, 37.75, region_labels[1], size=12)
+        axx.text(axx.get_xlim()[1]*0.67, 27.75, region_labels[2], size=12)
+        axx.text(axx.get_xlim()[1]*0.67, 18.5,  region_labels[3], size=12)
+        axx.text(axx.get_xlim()[1]*0.67, 12.25, region_labels[4], size=12)
+        axx.text(axx.get_xlim()[1]*0.67, 0.25,  region_labels[5], size=12)
+
+        axx.axhline(y=45, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+        axx.axhline(y=35, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+        axx.axhline(y=23, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+        axx.axhline(y=18, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+        axx.axhline(y=5, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
+            
+        fig = plt.gcf()
+        fig.subplots_adjust(bottom=0.1,left=0.06,top=2.945,right=0.99)
+        #axx = fig.add_subplot(1,1,1)
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.04),fancybox=True, shadow=True, ncol=2, fontsize = 11)
+
+        save_figure(os.path.join(output_path, region_labels[-1], 'predevAnthropogenicExports','predevAnthropogenicExports_' + con + '.png'))
+
+    return results
+
+
+def summarise_annual_observations(regions,site_list,modelled_annual_by_region,measured_annual_by_region,only_good_quality=True):
+    summaryAnnualRegions = {}
+
+    for region in regions:
+        print (region)
+        sitesOfInterest = site_list[site_list['NRM_short']==region]['Station']
+        measuredSites = sitesOfInterest
+        summaryAnnualSites = {site: pd.DataFrame() for site in measuredSites}
+
+        #summaryAnnualSites = {site: pd.DataFrame() for site in parasCompare_latest}
+
+        for site in measuredSites:
+            print (site)
+            summaryAnnualParas = {para: pd.DataFrame() for para in PARAS_COMPARE_LATEST}
+
+            for para in PARAS_COMPARE_LATEST:
+                print (para)
+                modelled = modelled_annual_by_region[region][site][para]
+
+                ###Use the below command if the measured is not filtering by representivity rating
+                #measured = measuredAnnualRegions[region][site][para]
+                #print(measured.count())
+
+                #### ONLY to filter Excellent, Good & Moderate Representative ratings from observed data (neglect Indicative)
+
+                if only_good_quality:
+                    measured = filter_for_good_quality_observations(measured_annual_by_region[region][site])[para]
+                    if measured.count() < 3:
+                        logger.info('Insufficient "good" quality observations. Skipping %s/%s/%s', region, site, para)
+                        continue
+                else:
+                    measured = measured_annual_by_region[region][site][para]
+
+                # Ensure each year only appears once (take mean if duplicates exist)
+                measured = measured.groupby(level=0).mean()
+                modelled = modelled.groupby(level=0).mean()
+
+                common_years = measured.index.intersection(modelled.index)
+
+                measured = measured.loc[common_years]
+                modelled = modelled.loc[common_years]
+
+
+                compare = pd.concat([measured,modelled], axis=1)
+                compare.columns = [OBSERVATION_COLUMN,'Modelled']
+
+                if para == 'Flow':
+                    compare = compare/1000 # TODO WHY?
+                elif para == 'TSS':
+                    compare = compare/1000 # TODO WHY?
+                else:
+                    compare = compare
+
+                years_sorted = sorted(compare.index, key=lambda x: int(x.split('-')[0]))
+
+                compare.index = pd.Categorical(compare.index, categories=years_sorted, ordered=True)
+
+                compare = compare.sort_index()
+                summaryAnnualParas[para] = compare
+
+            summaryAnnualSites[site] = summaryAnnualParas
+
+        summaryAnnualRegions[region] = summaryAnnualSites
+
+    return summaryAnnualRegions
+
+def model_observed_ratios_by_site(output_path,regions,site_list,annual_by_quality,only_good_quality=True):
+    for region in regions:
+        print(region)
+        q = 'yes' if only_good_quality else 'no'
+        sitesOfInterest = site_list[site_list['NRM_short']==region]['Station']
+
+        measuredSites = sitesOfInterest
+
+        for site in measuredSites:
+            averageAnnualsBySites = []
+            print(site)
+
+            for para in PARAS_COMPARE_LATEST:
+                print(para)
+
+                summaryAnnual_temp = annual_by_quality[q][region]
+
+                annuals = summaryAnnual_temp[site][para]
+                nonNaNs = annuals.dropna()
+                averageAnnual = nonNaNs.mean()
+                numYears = nonNaNs.count()
+                averageAnnual['num'] = numYears.sum()/2
+
+                averageAnnualsBySites.append(averageAnnual)
+
+            averageAnnualSites = pd.DataFrame(averageAnnualsBySites)
+            averageAnnualSites = averageAnnualSites.fillna(0)
+            averageAnnualSites = averageAnnualSites.T
+            averageAnnualSites.columns = ['', '','','','','','','','','']  #,''
+
+            columns = ['Flow (GL/yr)', 'TSS (kt/yr)','TN (t/yr)','PN (t/yr)','DIN (t/yr)','DON (t/yr)','TP (t/yr)','PP (t/yr)','DIP (t/yr)','DOP (t/yr)']  #, 'PSII TE (kg/yr)'
+
+            averageAnnualSites.columns = columns
+
+            ratios_names = ['PN:TSS \n(t/kt)','PN:TN \n(t/t)','DIN:TN \n(t/t)','DON:TN \n(t/t)','PP:TSS \n(t/kt)','PP:TP \n(t/t)','DIP:TP \n(t/t)','DOP:TP \n(t/t)']
+
+            if averageAnnualSites.sum().sum() == 0:
+                continue
+
+            else:
+
+                measured = pd.DataFrame(averageAnnualSites.T[OBSERVATION_COLUMN]).T
+                modelled = pd.DataFrame(averageAnnualSites.T['Modelled']).T
+
+                ratios_measured = pd.DataFrame([
+                                   measured['PN (t/yr)']/measured['TSS (kt/yr)'],
+                                   measured['PN (t/yr)']/measured['TN (t/yr)'],
+                                   measured['DIN (t/yr)']/measured['TN (t/yr)'],
+                                   measured['DON (t/yr)']/measured['TN (t/yr)'],
+                                   measured['PP (t/yr)']/measured['TSS (kt/yr)'],
+                                   measured['PP (t/yr)']/measured['TP (t/yr)'],
+                                   measured['DIP (t/yr)']/measured['TP (t/yr)'],
+                                   measured['DOP (t/yr)']/measured['TP (t/yr)']
+                                  ])
+
+                ratios_modelled = pd.DataFrame([
+                                   modelled['PN (t/yr)']/modelled['TSS (kt/yr)'],
+                                   modelled['PN (t/yr)']/modelled['TN (t/yr)'],
+                                   modelled['DIN (t/yr)']/modelled['TN (t/yr)'],
+                                   modelled['DON (t/yr)']/modelled['TN (t/yr)'],
+                                   modelled['PP (t/yr)']/modelled['TSS (kt/yr)'],
+                                   modelled['PP (t/yr)']/modelled['TP (t/yr)'],
+                                   modelled['DIP (t/yr)']/modelled['TP (t/yr)'],
+                                   modelled['DOP (t/yr)']/modelled['TP (t/yr)']
+                                  ])
+
+                ratios_summary = pd.concat([ratios_measured,ratios_modelled],axis=1)
+                ratios_summary.index = ratios_names
+
+                #ratios_summary.to_csv(site + '_ratios.csv')
+
+
+                axx = pd.DataFrame(ratios_summary).plot(kind='bar',fontsize=8,color=['dodgerblue','tomato'],edgecolor='black')
+
+                axx.set_ylabel("Ratios", size = 8)
+                axx.legend(['Monitored','Modelled'],ncol=2,fontsize=8)
+                #plt.text(-0.5,-1,'PN:TSS and PP:TSS ratios are in t/kt, while others ratios are in t/t',fontsize = 10)
+
+
+                #axx.get_yaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
+
+                fig = plt.gcf()
+                fig.subplots_adjust(bottom=0.1,left=0.0,top=1.0,right=1.3)
+               # axx = fig.add_subplot(111)
+
+                if only_good_quality:
+                    sub_dir = 'qualityData'
+                else:
+                    sub_dir = 'allData'
+                save_figure(os.path.join(output_path,region,'modelledVSmeasured',sub_dir,'ratios',site + '.png'))
+
+def average_annual_comparisons(output_path,regions,site_list,annual_by_quality):
+    for filter_data in [True,False]:
+        q = 'yes' if filter_data else 'no'
+        print(q)
+
+        for region in regions:
+            print(region)
+
+            sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
+
+            measuredSites = sitesOfInterest
+
+            for site in measuredSites:
+                averageAnnualsBySites = []
+                print(site)
+
+                for para in PARAS_COMPARE_LATEST:
+                    print(para)
+
+                    summaryAnnual_temp = annual_by_quality[q][region]
+
+                    annuals = summaryAnnual_temp[site][para]
+                    nonNaNs = annuals.dropna()
+                    averageAnnual = nonNaNs.mean()
+                    numYears = nonNaNs.count()
+
+                    averageAnnual['num'] = numYears.sum()/2
+
+                    averageAnnualsBySites.append(averageAnnual)
+
+                averageAnnualSites = pd.DataFrame(averageAnnualsBySites)
+                averageAnnualSites = averageAnnualSites.fillna(0)
+                averageAnnualSites = averageAnnualSites.T
+                averageAnnualSites.columns = ['', '','','','','','','','','']  #,''
+
+                if averageAnnualSites.sum().sum() == 0:
+                    continue
+
+                else:
+                    axx = pd.DataFrame(averageAnnualSites[0:2].T).plot(kind='bar',fontsize=8,color=['dodgerblue','tomato'],edgecolor='black')
+
+                axx.set_ylabel("Flow and Loads", size = 8)
+                axx.legend(['Monitored','Modelled'],ncol=2,fontsize=8)
+
+                axx.get_yaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
+
+                columns = ['Flow (GL/yr)', 'TSS (kt/yr)','TN (t/yr)','PN (t/yr)','DIN (t/yr)','DON (t/yr)','TP (t/yr)','PP (t/yr)','DIP (t/yr)','DOP (t/yr)']  #, 'PSII TE (kg/yr)'
+
+                averageAnnualSites = averageAnnualSites.values.astype(int)
+                averageAnnualSites = pd.DataFrame(averageAnnualSites)
+                averageAnnualSites = averageAnnualSites.map('{:,}'.format)
+                averageAnnualSites = averageAnnualSites.values
+
+                # Add a table at the bottom of the axes
+                the_table = plt.table(cellText=averageAnnualSites,
+                            rowLabels=['Monitored','Modelled','Years of Data'],
+                            colLabels=columns,
+                            loc='bottom')
+                the_table.auto_set_font_size(False)
+                the_table.set_fontsize(7)
+
+
+                fig = plt.gcf()
+                fig.subplots_adjust(bottom=0.1,left=0.0,top=1.0,right=1.3)
+                #axx = fig.add_subplot(111)
+
+                if q == 'yes':
+                    sub_dir = 'qualityData'
+                else:
+                    sub_dir = 'allData'
+                save_figure(os.path.join(output_path,region,'modelledVSmeasured',sub_dir,'averageAnnuals','bySites','averageAnnuals_' + site + '.png'))
+
+def average_annual_comparison_at_regional_sites(output_path,regions,site_list,paras_compare,annual_by_quality,xticks_by_region):
+    ### Plots average annuals by Constituents for all regional sites
+
+    for q in ['yes','no'][0:1]:
+        print(q)
+
+        for para in PARAS_COMPARE_LATEST:
+            print(para)
+            averageAnnualParas = {para: pd.DataFrame() for para in paras_compare}
+
+            for region in regions:
+                print(region)
+
+                sitesOfInterest = pd.DataFrame(site_list[site_list['NRM_short'] == region]['Station'].tolist())
+                sitesOfInterest.columns = ['Sname']
+                sitesOfInterest = sitesOfInterest.sort_values('Sname')
+                sitesOfInterest = sitesOfInterest['Sname'].tolist()
+                measuredSites = sitesOfInterest
+
+                print(measuredSites)
+
+                averageAnnualsByParas = []
+
+                for site in measuredSites:
+                    print(site)
+
+                    annuals = annual_by_quality[q][region][site][para]
+                    averageAnnual = annuals.dropna().mean()
+
+                    averageAnnualsByParas.append(averageAnnual)
+
+                averageAnnualParas = pd.DataFrame(averageAnnualsByParas)
+                averageAnnualParas.index = measuredSites
+                num = regions.index(region)
+                #axx = fig.add_subplot(3,2,num+1)
+                averageAnnualParas = averageAnnualParas.dropna()
+
+                if averageAnnualParas.empty == False:
+                    ax = pd.DataFrame(averageAnnualParas).plot(kind='bar',color=['dodgerblue','tomato'],edgecolor='black')
+                else:
+                    continue
+
+                print(averageAnnualParas)
+
+                ax.set_xlabel('')
+
+                if para == 'Flow':
+                    ax.set_ylabel(para + ' (GL)',size=10)
+                elif para == 'TSS':
+                    ax.set_ylabel(para + ' (kt)',size=10)
+                elif para == 'PSII TE':
+                    ax.set_ylabel(para + ' (kg)',size=10)
+                else:
+                    ax.set_ylabel(para + ' (t)',size=10)
+
+                ax.legend(['Monitored','Modelled'],ncol=2,fontsize=9, loc='lower center', bbox_to_anchor=(0.5,1))
+
+                xticks = xticks_by_region[region]
+
+                xticks = list(xticks[i] for i in pd.DataFrame(measuredSites).index[np.isin(measuredSites, averageAnnualParas.index)==True])#pd.DataFrame(measuredSites)[np.isin(measuredSites, averageAnnualParas.index)==True])
+                ax.set_xticklabels(xticks, rotation = 90)
+
+                if q == 'yes':
+                    sub_dir = 'qualityData'
+                else:
+                    sub_dir = 'allData'
+                save_figure(os.path.join(output_path, region, 'modelledVSmeasured', sub_dir, 'averageAnnuals', 'byConstituents', 'averageAnnuals_' + para + '.png'))
+
+def average_annuals_by_constituent_regional(output_path,regions,site_list,annual_by_quality):
+    for q in ['yes', 'no']:
+        for para in PARAS_COMPARE_LATEST:
+            fig, axs = plt.subplots(nrows=3, ncols=2, figsize=(12, 16))
+            fig.subplots_adjust(hspace=.7, wspace=.2)
+
+            for region_idx, region in enumerate(regions):
+                measuredSites = site_list.loc[
+                    site_list['NRM_short'] == region, 'Station'
+                ].sort_values().tolist()
+
+                averageAnnualsByParas = []
+                for site in measuredSites:
+                    annuals = annual_by_quality[q][region][site][para]
+                    averageAnnual = annuals.dropna().mean()
+                    averageAnnualsByParas.append(averageAnnual)
+
+                averageAnnualParas = pd.DataFrame(
+                    averageAnnualsByParas, index=measuredSites
+                ).dropna()
+
+                print(f"Region: {region}, Parameter: {para}, Quality: {q}")
+                print(averageAnnualParas)  # <-- dump actual data values here
+
+                axx = axs.flatten()[region_idx]
+
+                if averageAnnualParas.empty:
+                    print(f"[DEBUG] No data to plot for region '{region}'")
+                    axx.set_visible(False)
+                else:
+                    averageAnnualParas.plot(
+                        kind='bar',
+                        color=['dodgerblue', 'tomato'],
+                        edgecolor='black',
+                        ax=axx
+                    )
+                    axx.set_title(region)
+
+            # Save the figure after all subplots are ready
+            if q == 'yes':
+                sub_dir = 'qualityData'
+            else:
+                sub_dir = 'allData'
+            save_figure(os.path.join(output_path,OVERALL_REGION,'modelledVSmeasured',sub_dir,'averageAnnuals',f'averageAnnuals_{para}.png'))
+
+            plt.close(fig)
+
+
+def calc_moriasi_stats(output_path,regions,constituents,site_list,annual_by_quality):
+    MORIASI_COLUMNS=[
+        'Region','Site','Constituent',
+        'RSR','RSR Rating',
+        'NSE','NSE Rating',
+        'R2','R2 Rating',
+        'PBias','PBias Rating'
+    ]
+
+    for q in ['yes','no']:
+
+        filename_suffix='_quality_only' if q=='yes' else '_alldata'
+        site_directory='qualityData' if q=='yes' else 'allData'
+
+        print(q)
+
+
+        Moriasi_stat_region_86_23 =  pd.DataFrame(columns=MORIASI_COLUMNS)
+        # Moriasi_stat_region_86_14 =  pd.DataFrame(columns=MORIASI_COLUMNS)
+
+
+        for region in regions:
+            print(region)
+
+            sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
+            measuredSites = sitesOfInterest
+
+
+            sitesMoriasi = []
+
+            summaryAnnual_temp_list = annual_by_quality[q][region]
+
+            dfs = []
+
+            for site_id, param_dict in summaryAnnual_temp_list.items():
+                for param, df in param_dict.items():
+                    # Reset index to get year as a column
+                    df_reset = df.reset_index()
+                    # Rename the index column to 'Year'
+                    df_reset = df_reset.rename(columns={'index': 'Year'})
+                    # Add columns for site and parameter
+                    df_reset['Site'] = site_id
+                    df_reset['Constituent'] = param
+                    dfs.append(df_reset)
+
+            # Concatenate all into one DataFrame
+            summaryAnnual_temp = pd.concat(dfs, ignore_index=True)
+
+            # Optional: reorder columns for clarity
+            summaryAnnual_temp = summaryAnnual_temp[['Site', 'Constituent', 'Year', OBSERVATION_COLUMN, 'Modelled']]
+
+            summaryAnnual_temp = summaryAnnual_temp.rename(columns={OBSERVATION_COLUMN: 'Monitored'})
+
+            # annuals = summaryAnnual_temp[(summaryAnnual_temp['Site']==site ) & (summaryAnnual_temp['Constituent']==para)]
+
+            for site in sitesOfInterest:
+                if summaryAnnual_temp.loc[(summaryAnnual_temp['Site'] == site) & (summaryAnnual_temp['Constituent'] == 'Flow')].empty == False:
+                    if summaryAnnual_temp.loc[(summaryAnnual_temp['Site'] == site) & (summaryAnnual_temp['Constituent'] == 'Flow')]['Monitored'].count()>2:
+                        sitesMoriasi.append(site)
+                    else:
+                        continue
+                else:
+                    continue
+
+            for site in sitesMoriasi:
+
+                print(site)
+                ### 1986 to 2023
+
+                Moriasi_stat_site_86_23 =  pd.DataFrame(columns=MORIASI_COLUMNS)
+
+                Annual_site_df = summaryAnnual_temp.loc[summaryAnnual_temp['Site'] == site]
+
+                for idx, constituent in enumerate(constituents):
+                    print(constituent)
+                    Annual_site_df_constituent = Annual_site_df.loc[(Annual_site_df['Constituent'] == constituent)]
+
+                    # Remove rows with NaN in 'Modelled' and 'Monitored' columns
+                    Annual_site_df_cleaned = Annual_site_df_constituent.dropna(subset=['Modelled', 'Monitored'])
+
+                    # Calculate the average values for Load_Modelled_T and Load_monitored_T
+                    load_modelled = Annual_site_df_cleaned['Modelled']
+                    load_monitored = Annual_site_df_cleaned['Monitored']
+
+                    pbias = round(spotpy.objectivefunctions.pbias(load_monitored, load_modelled ),2)
+                    nse = round(spotpy.objectivefunctions.nashsutcliffe(load_monitored, load_modelled),2)
+
+                    RSR = (1-nse)**(1/2)
+
+                    # Calculate R-squared
+                    SS_res = ((load_monitored - load_modelled) ** 2).sum()
+                    SS_tot = ((load_monitored - load_modelled.mean()) ** 2).sum()
+                    r2 = round((1 - (SS_res / SS_tot)),2)
+
+                    # get the ratings :
+                    if constituent in ['TN', 'PN', 'DIN', 'DON']:
+                        moriasi_category='TN'
+                    elif constituent in ['TP', 'PP', 'DIP', 'DOP']:
+                        moriasi_category='TP'
+                    else:
+                        moriasi_category=constituent
+
+                    rsr_rating = moriasi.rsr_rating(RSR,moriasi_category)
+                    pbias_rating = moriasi.pbias_rating(pbias,moriasi_category)
+                    nse_rating = moriasi.nse_rating(nse,moriasi_category)
+                    r2_rating = moriasi.r2_rating(r2,moriasi_category)
+
+                    # Append the values to the moriasi_stat
+
+                    Moriasi_stat_site_86_23.loc[idx] = [region,site, constituent,RSR, rsr_rating, nse, nse_rating ,r2, r2_rating , pbias, pbias_rating ]
+
+                    Moriasi_stat_site_86_23.to_csv(os.path.join(output_path,region,'modelledVSmeasured',site_directory,'Moriasi',f'{site}_Moriasi_stats_86_14{filename_suffix}.csv'),index=False)
+
+                Moriasi_stat_region_86_23 = pd.concat([Moriasi_stat_region_86_23, Moriasi_stat_site_86_23])
+
+        Moriasi_stat_region_86_23.to_csv(os.path.join(output_path,f'Moriasi_stats_reporting_period_86_23{filename_suffix}.csv'),index=False)
+
+def plot_annual_all_sites(output_path,regions,site_list,annual_by_quality):
+    for q in ['yes','no']:
+        print(q)
+
+        for region in regions:
+            print (region)
+
+            sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
+            measuredSites = sitesOfInterest
+
+            sitesAnnual = []
+            for site in measuredSites:
+                # print(site)
+                if not annual_by_quality[q][region][site]['Flow'].empty:
+                    sitesAnnual.append(site)
+
+            for site in sitesAnnual:
+                print (site)
+
+                    #summaryAnnualParas = {para: pd.DataFrame() for para in parasCompare_latest}
+
+                for para in PARAS_COMPARE_LATEST[:-1]:  #[0:1]
+                    print (para)
+
+                    annuals = annual_by_quality[q][region][site][para]
+                    compare = annuals.dropna().copy()
+
+                    if compare[OBSERVATION_COLUMN].isnull().all().all():
+                        compare[OBSERVATION_COLUMN] = compare[OBSERVATION_COLUMN].replace('NaN', 0)
+                    # else:
+                    #     compare[OBSERVATION_COLUMN] = compare[OBSERVATION_COLUMN]
+
+                    compare = compare.T
+                    compare['Avg. Annual'] = compare.T.dropna().mean()
+                    compare = compare.T
+
+
+                    #axx = compare.dropna().plot(kind='bar',title= para + ' at ' + site)
+                    axx = compare.dropna().plot(kind='bar')  #,title= para + ' at ' + site
+
+    #                 compare.to_csv(reportcardOutputsPrefix + '//' + region + '//modelledVSmeasured//qualityData//' + 'annuals//' + site + para + 'annualComparions.csv')
+
+
+
+                    if para == 'Flow':
+                        axx.set_ylabel(para + ' (GL)',size=8)
+                    elif para == 'TSS':
+                        axx.set_ylabel(para + ' (kt)',size=8)
+                    elif para == 'PSII TE':
+                        axx.set_ylabel(para + ' (kg)',size=8)
+                    else:
+                        axx.set_ylabel(para + ' (t)',size=8)
+
+                        #axx.set_xlabel('Water Year',size=8)
+
+                    if q == 'yes':
+                        sub_dir = 'qualityData'
+                    else:
+                        sub_dir = 'allData'
+                    save_path = os.path.join(output_path,region,'modelledVSmeasured',sub_dir,'annuals',site)
+                    Path(save_path).mkdir(parents=True, exist_ok=True)
+                    save_figure(os.path.join(save_path,para + '.png'))
+
+
+### Temporarily stored REGSOURCESINKSUMMARY are used below to do number crunching to produce various plots
+### LoadToStream are estimated below for all BASINs by FUs of interest and CONSTITUENTs of interest
+### NO UNIT CONVERSION IS DONE HERE - all units are similar to that of REGSOURCESINKSUMMARY
+def land_use_supply_by_basin(regions,models,constituents,regional_contributions,fus_of_interest):
+    BasinLoadToStream_FU = {}
+
+    for region in regions:
+        print(region)
+
+        BasinLoadToStream_FU[region] = {}
+
+        for model in models:
+            print(model)
+
+            data = regional_contributions[region][model]
+            # data_summary = data.reset_index().groupby(['Rep_Region','Constituent','FU']).sum()
+            data_summary = data.reset_index().groupby(['Manag_Unit_48','Constituent','FU']).sum(numeric_only = True)
+            BASINs = data_summary.index.levels[0]
+
+            BasinLoadToStream_FU[region][model] = {basin: pd.DataFrame() for basin in BASINs}
+
+            for basin in BASINs:
+                print(basin)
+
+                BasinLoadToStream_FU[region][model][basin] = {}
+                data_summary2 = data_summary.loc[basin].T[constituents]
+                data_summary3 = data_summary2.T
+
+                for con in constituents:
+                    print (con)
+
+                    #if region == 'BU' and model == 'BASE':
+                    #    BasinLoadToStream_FU[region][model][basin][con] = data_summary3.loc[con]['LoadToStream']
+                    #elif region == 'BU' and model == 'CHANGE':
+                    #    BasinLoadToStream_FU[region][model][basin][con] = data_summary3.loc[con]['LoadToStream']
+                    #else:
+                    BasinLoadToStream_FU[region][model][basin][con] = data_summary3.loc[con]['LoadToStream (kg)']
+
+                BasinLoadToStream_FU[region][model][basin] = pd.DataFrame(BasinLoadToStream_FU[region][model][basin]).T
+                # BasinLoadToStream_FU[region][model][basin]['Grazing'] = BasinLoadToStream_FU[region][model][basin]['Grazing Forested'] + \
+                #                                                            BasinLoadToStream_FU[region][model][basin]['Grazing Open']
+                BasinLoadToStream_FU[region][model][basin]['Cropping'] = BasinLoadToStream_FU[region][model][basin]['Dryland Cropping'] + \
+                                                                            BasinLoadToStream_FU[region][model][basin]['Irrigated Cropping']
+                BasinLoadToStream_FU[region][model][basin]['Urban + Other'] = BasinLoadToStream_FU[region][model][basin]['Urban'] + \
+                                                                                BasinLoadToStream_FU[region][model][basin]['Other']
+                for fu in FILL_FUS:
+                    if fu not in BasinLoadToStream_FU[region][model][basin]:
+                        BasinLoadToStream_FU[region][model][basin][fu] = pd.NA
+
+                BasinLoadToStream_FU[region][model][basin] = BasinLoadToStream_FU[region][model][basin][fus_of_interest].T
+    return BasinLoadToStream_FU
+
+### Region by Region Land Use based Exported load Contributions are estimated using above Basin by Basin estimates
+def land_use_supply_by_region(basin_supply,scenario='BASE'):
+    result = {}
+
+    for region, base in basin_supply.items():
+        print(region)
+
+        base = basin_supply[region][scenario]
+        basins = base.keys()
+
+        Region_sum = 0
+
+        for basin, df in basin_supply[region][scenario].items():
+            df_clean = df.apply(pd.to_numeric, errors='coerce').fillna(0)
+            Region_sum = Region_sum + df_clean
+
+        result[region] = Region_sum
+    return result
+
+def land_use_supply_totals(region_supply):
+    result = 0
+
+    for region,data in region_supply.items():
+        print(region)
+
+        result = result + data.fillna(0)
+
+    return result
+
+def plot_land_use_based_supply(output_path,regions,constituents,region_supply,region_areas,years):
+    for region in regions:
+        print(region)
+
+        RegionLoad = region_supply[region]
+        RegionLoad = RegionLoad[constituents]
+        if 'Flow' in RegionLoad.columns:
+            RegionLoad = RegionLoad.drop(columns=['Flow'])
+        RegionLoad_export = RegionLoad*[c.KG_TO_KTONS,c.KG_TO_TONS,c.KG_TO_TONS,c.KG_TO_TONS,c.KG_TO_TONS,c.KG_TO_TONS,c.KG_TO_TONS]/years #unit conversion
+        RegionFUArea = region_areas[region]
+        RegionFUArea = RegionFUArea*c.M2_TO_HA  #unit conversion
+
+        for con in constituents[0:4]:
+            print(con)
+
+            plt.clf()
+
+            if con == 'TSS':
+                ArealRegionLoad = RegionLoad[con]*c.KG_TO_TONS/RegionFUArea['Area']/years
+            else:
+                ArealRegionLoad = RegionLoad[con]/RegionFUArea['Area']/years
+
+            #print (ArealRegionLoad)
+
+            ax1 = RegionLoad_export[con].plot(kind='bar',color='m',width=0.4,grid="off",edgecolor='black')
+            ax1.set_xlabel('')
+            ax1.grid(False)
+
+            ax2 = ax1.twinx()
+            ax2 = ArealRegionLoad.plot(kind='bar',color='g',width=0.15,grid="off",edgecolor='black')
+            ax2.set_xlabel('')
+            ax2.grid(False)
+
+            if con == 'Flow':
+                ax1.set_ylabel(con + ' (GL/yr OR ML/yr ???)',size=8)
+                ax1.legend(['kt/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+                ax2.set_ylabel(con + ' (GL/yr OR ML/yr ???)',size=8)
+                ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+            elif con == 'TSS':
+                ax1.set_ylabel(con + ' (kt/yr)',size=8)
+                ax1.legend(['kt/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+                ax2.set_ylabel(con + ' (t/ha/yr)',size=8)
+                ax2.legend(['t/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+            elif con in ['DIN','DON','PN','DOP','DIP','PP']:
+                ax1.set_ylabel(con + ' (t/yr)',size=8)
+                ax1.legend(['t/yr'],loc='lower left',bbox_to_anchor=(0.05,1),fontsize=8)
+                ax2.set_ylabel(con + ' (kg/ha/yr)',size=8)
+                ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+            else:
+                ax1.set_ylabel(con + ' (kg/yr)',size=8)
+                ax1.legend(['kg/yr'],loc='lower left',bbox_to_anchor=(0.05,1.0),fontsize=8)
+                ax2.set_ylabel(con + ' (kg/ha/yr)',size=8)
+                ax2.legend(['kg/ha/yr'],loc='lower left', bbox_to_anchor=(0.2,1.0),fontsize=8)
+
+            save_figure(os.path.join(output_path,region,'landuseBasedSupply', con + '_supplyTonnageArealsbyLanduse.png'))
+
+            ### Estimating and Plotting TSS, PN, PP, DIN Contribution by Landuse
+
+            contribution = RegionLoad[constituents[:4]]
+            contribution = contribution/contribution.sum()*100
+
+
+            ax3 = contribution.T.plot(kind='bar',width=0.6,grid="off",color=FU_COLORS)
+
+            ax3.legend(bbox_to_anchor=(1,1),fontsize=6.4,ncol=5)
+            ax3.set_ylim(0,100)
+            ax3.set_ylabel("Percent Contribution",size=8)
+            ax3.set_xticklabels(['TSS','PN','PP','DIN'],rotation='horizontal')
+            ax3.set_xlabel('')
+
+            save_figure(os.path.join(output_path,region,'landuseBasedSupply','supplyPercentByLanduse.png'))
+
+def plot_sankey_diagrams(output_path,sankey_regions,sankey_basins,source_sink_budgets,export_by_process,years):
+    # Make these settings explicit....
+    scenario='BASE'
+    constituent='TSS'
+    scale=c.KG_TO_KTONS
+    units='kt/Year'
+
+    for region in sankey_regions:
+        print(region)
+
+        basins = sankey_basins[sankey_regions.index(region)]
+
+        for basin in basins:
+            print(basin)
+
+            fig = plt.gcf()
+            fig.subplots_adjust(bottom=0.1,left=0.06,top=1.945,right=2.2)
+            ax = fig.add_subplot(1,1,1,xticks=[], yticks=[])
+            plt.rc('font', size=12)
+            ax.axis('off')
+
+
+            SourceSink = source_sink_budgets[region][scenario][basin][constituent]*scale/years
+            SourceSink.columns = [units]
+            SourceSink
+
+            Export = export_by_process[region][scenario][basin][constituent]*scale/years
+            Export.columns = [units]
+            Export
+
+
+            SourceSink_new = pd.DataFrame([])
+            Export_new = pd.DataFrame([])
+
+            SourceSink_new["Streambank_supply"] = SourceSink.T["Streambank"]
+            SourceSink_new["Hillslope_supply"] = SourceSink.T["Hillslope"]
+            SourceSink_new["Gully_supply"] = SourceSink.T["Gully"]
+            SourceSink_new["ChannelRemobilisation_supply"] = SourceSink.T["ChannelRemobilisation"]
+
+            SourceSink_new["Extraction_Other_loss"] = SourceSink.T["Extraction + Other Minor Losses"]*-1
+            SourceSink_new["FloodPlainDeposition_loss"] = SourceSink.T["FloodPlainDeposition"]*-1
+            SourceSink_new["ReservoirDeposition_loss"] = SourceSink.T["ReservoirDeposition"]*-1
+            SourceSink_new["StreamDeposition_loss"] = SourceSink.T["StreamDeposition"]*-1
+
+            Export_new["ChannelRemobilisation_export"] = Export.T["ChannelRemobilisation"]*-1
+            Export_new["Gully_export"] = Export.T["Gully"]*-1
+            Export_new["Hillslope_export"] = Export.T["Hillslope"]*-1
+            Export_new["Streambank_export"] = Export.T["Streambank"]*-1
+
+            summary = pd.concat([SourceSink_new.T,Export_new.T])
+
+            Total_supply = SourceSink.T["Streambank"]+SourceSink.T["Hillslope"]+SourceSink.T["Gully"]+SourceSink.T["ChannelRemobilisation"]
+            Total_loss = SourceSink.T["Extraction + Other Minor Losses"]+SourceSink.T["FloodPlainDeposition"]+SourceSink.T["ReservoirDeposition"]+SourceSink.T["StreamDeposition"]
+            Total_export = Export.T["Gully"]+Export.T["Hillslope"]+Export.T["Streambank"]+Export.T["ChannelRemobilisation"]
+
+            summary = summary[summary[units] != 0 ]
+
+            numbers = summary[units].tolist()
+
+            print(summary)
+            print(summary[units].sum())
+            print(numbers)
+            #######################
+            ##### plotting ########
+            #######################
+            TEXT_OPT={
+                'fontsize':20,
+                'color': 'black'
+            }
+
+            SANKEY_OPT={
+                'unit':'kt/y',
+                'offset':0.2,
+                'head_angle':100,
+                'alpha':0.75,
+                'lw':1,
+                'facecolor':'brown'
+            }
+
+            #
+            #
+            # PRIMARY DIFFERENCE IS WHETHER OR NOT THEY HAVE RESERVOIR DEPOSITION
+            #
+            #
+            sankey_specifics={
+                'format':'%.2f',
+                'scale':0.001
+            }
+            have_reservoir=False
+            if region == 'CY':
+                lbl_supply_loc = -1.32,0
+                lbl_export_loc = 1.3,0.4
+                lbl_loss_loc = 0.45, -1.1
+                lbl_char = '~'
+
+            elif region == 'WT':
+                lbl_supply_loc = -1.5,0
+                lbl_export_loc = 1.3, 0.4
+                lbl_loss_loc = 0.45,-1.2
+                lbl_char = ' '
+                sankey_specifics['format']='%.0f'
+                if basin not in ['Johnstone','Upper Herbert']:
+                    have_reservoir=True
+
+            elif region == 'BU':
+                have_reservoir=True
+                lbl_supply_loc = -1.5,0
+                lbl_export_loc = 1.2, 0.3
+                lbl_loss_loc = 0.7,-1.1
+                lbl_char = ' '
+                sankey_specifics['format']='%.0f'
+                sankey_specifics['scale']=0.00007
+
+            elif region == 'MW':
+                lbl_supply_loc = -1.2,0.2
+                lbl_export_loc = 1.2, 0.3
+                lbl_loss_loc = 0.7,-1.1
+                lbl_char = '~'
+                sankey_specifics['scale']=0.0003
+                if basin == 'Pioneer' :
+                    have_reservoir=True
+
+            elif region == 'FI':
+                lbl_supply_loc = -1.25,0.0
+                lbl_export_loc = 1.1, 0.45
+                lbl_loss_loc = 0.7,-1.2
+                lbl_char = ' '
+                sankey_specifics['format']='%.0f'
+                sankey_specifics['scale']=0.0001
+
+            elif region == 'BM':
+                have_reservoir=True
+
+            if have_reservoir:
+                labels=['Streambank\nSupply','Hillslope\nSupply','Gully\nSupply',
+                        'Extraction and \nOther \nMinor Lossees', 'Floodplain\ndeposition','Reservoir\nDeposition',
+                        'Gully\nExport', 'Hillslope\nExport','Streambank\nExport',]  #'Channel\nRemobilisation\nExport',
+                orientations=[0, -1, 1, #1,
+                                -1, -1, -1, #-1,
+                                1, 1, 0] #1,
+            else:
+                labels=['Streambank\nSupply','Hillslope\nSupply','Gully\nSupply',
+                        'Extraction and \nOther \nMinor Losses', 'Floodplain\ndeposition',
+                        'Gully\nExport', 'Hillslope\nExport','Streambank\nExport',]
+                orientations=[0, -1, 1,
+                                -1, -1,
+                                1, 1, 0]
+
+            Sankey(flows=numbers,
+                    labels=labels,
+                    orientations=orientations,
+                    ax=ax,**sankey_specifics,**SANKEY_OPT).finish()
+
+            lbl_total_supply = str(round(Total_supply[units],0).astype(int))
+            lbl_total_export = str(int(round(Total_export[units],0)))
+            lbl_total_loss = str(round(Total_loss[units],0).astype(int))
+
+            plt.text(*lbl_supply_loc,'TOTAL SUPPLY\n  ' + lbl_char + ' ' + lbl_total_supply + ' kt/yr', **TEXT_OPT, rotation=90)
+            plt.text(*lbl_export_loc,'TOTAL EXPORT\n  ' + lbl_char + ' ' + lbl_total_export + ' kt/yr', **TEXT_OPT, rotation=0)
+            plt.text(*lbl_loss_loc,'TOTAL LOSS\n  ' + lbl_char + ' ' + lbl_total_loss + ' kt/yr', **TEXT_OPT, rotation=0)
+
+            save_figure(os.path.join(output_path,region,'budgetExports_sankeyDiagrams',basin + '_budget_TSS.png'))
