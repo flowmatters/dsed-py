@@ -2318,3 +2318,38 @@ def plot_sankey_diagrams(output_path,sankey_regions,sankey_basins,source_sink_bu
             plt.text(*lbl_loss_loc,'TOTAL LOSS\n  ' + lbl_char + ' ' + lbl_total_loss + ' kt/yr', **TEXT_OPT, rotation=0)
 
             save_figure(os.path.join(output_path,region,'budgetExports_sankeyDiagrams',basin + '_budget_TSS.png'))
+
+def load_all_tables(ds,dfs,tag_names,**kwargs):
+    tag_name = tag_names[0]
+    tag_names = tag_names[1:]
+    for tag_value,collection in dfs.items():
+        tags = kwargs.copy()
+        tags[tag_name] = tag_value
+        if isinstance(collection,pd.DataFrame):
+            ds.add_table(collection,**tags)
+        else:
+            load_all_tables(ds,collection,tag_names,**tags)
+
+def process_two_sets_of_dfs(numerators,denominators,process):
+    '''
+    Process pairs of DataFrames in two nested sets of dictionaries using a function that takes two DataFrames and returns a DataFrame
+    '''
+    if isinstance(numerators,pd.DataFrame):
+        return process(numerators,denominators)
+    else:
+        keys = set(numerators.keys()).intersection(set(denominators.keys()))
+        return {k: process_two_sets_of_dfs(numerators[k],denominators[k],process) for k in keys}
+
+def per_area(load,area):
+    return (load.T/area['Area']).T
+
+def divide_dfs(numerators,denominators,fill_value=0.0):
+    '''
+    Divide all DataFrames in a nested set of dictionaries by corresponding DataFrames in another nested set of dictionaries
+    '''
+    def process(df_num,df_denom):
+        if df_denom.columns.size == 1:
+            # Broadcasting division across columns
+            return df_num.div(df_denom.loc[:,df_denom.columns[0]])
+        return df_num.div(df_denom,fill_value=fill_value)
+    return process_two_sets_of_dfs(numerators,denominators,process)
