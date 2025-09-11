@@ -1477,7 +1477,16 @@ def plot_predev_vs_anthropogenic(
     return results
 
 
-def summarise_annual_observations(regions,site_list,modelled_annual_by_region,measured_annual_by_region,only_good_quality=True):
+def summarise_annual_observations(regions,site_list,modelled_annual_by_region,measured_annual_by_region,only_good_quality=None):
+    if only_good_quality is None:
+        quality = ['yes','no']
+        result = {}
+
+        for q in quality:
+            print(q)
+            result[q] = summarise_annual_observations(regions, site_list,modelled_annual_by_region,measured_annual_by_region,only_good_quality=(q == 'yes'))
+        return result
+
     summaryAnnualRegions = {}
 
     for region in regions:
@@ -1543,9 +1552,20 @@ def summarise_annual_observations(regions,site_list,modelled_annual_by_region,me
 
     return summaryAnnualRegions
 
-def model_observed_ratios_by_site(output_path,regions,site_list,annual_by_quality,only_good_quality=True):
+def compute_model_observed_ratios(regions,site_list,annual_by_quality,only_good_quality=None):
+    if only_good_quality is None:
+        result = {}
+        for q in ['yes','no']:
+            print(q)
+            filter_by_quality = q == 'yes'
+            # filter_label = 'good quality only' if filter_by_quality else 'all data'
+            result[q] = compute_model_observed_ratios(regions, site_list, annual_by_quality,only_good_quality=filter_by_quality)
+        return result
+
+    result = {}
     for region in regions:
         print(region)
+        result[region] = {}
         q = 'yes' if only_good_quality else 'no'
         sitesOfInterest = site_list[site_list['NRM_short']==region]['Station']
 
@@ -1580,68 +1600,76 @@ def model_observed_ratios_by_site(output_path,regions,site_list,annual_by_qualit
             ratios_names = ['PN:TSS \n(t/kt)','PN:TN \n(t/t)','DIN:TN \n(t/t)','DON:TN \n(t/t)','PP:TSS \n(t/kt)','PP:TP \n(t/t)','DIP:TP \n(t/t)','DOP:TP \n(t/t)']
 
             if averageAnnualSites.sum().sum() == 0:
+                result[region][site] = None
                 continue
 
+            measured = pd.DataFrame(averageAnnualSites.T[OBSERVATION_COLUMN]).T
+            modelled = pd.DataFrame(averageAnnualSites.T['Modelled']).T
+
+            ratios_measured = pd.DataFrame([
+                                measured['PN (t/yr)']/measured['TSS (kt/yr)'],
+                                measured['PN (t/yr)']/measured['TN (t/yr)'],
+                                measured['DIN (t/yr)']/measured['TN (t/yr)'],
+                                measured['DON (t/yr)']/measured['TN (t/yr)'],
+                                measured['PP (t/yr)']/measured['TSS (kt/yr)'],
+                                measured['PP (t/yr)']/measured['TP (t/yr)'],
+                                measured['DIP (t/yr)']/measured['TP (t/yr)'],
+                                measured['DOP (t/yr)']/measured['TP (t/yr)']
+                                ])
+
+            ratios_modelled = pd.DataFrame([
+                                modelled['PN (t/yr)']/modelled['TSS (kt/yr)'],
+                                modelled['PN (t/yr)']/modelled['TN (t/yr)'],
+                                modelled['DIN (t/yr)']/modelled['TN (t/yr)'],
+                                modelled['DON (t/yr)']/modelled['TN (t/yr)'],
+                                modelled['PP (t/yr)']/modelled['TSS (kt/yr)'],
+                                modelled['PP (t/yr)']/modelled['TP (t/yr)'],
+                                modelled['DIP (t/yr)']/modelled['TP (t/yr)'],
+                                modelled['DOP (t/yr)']/modelled['TP (t/yr)']
+                                ])
+
+            ratios_summary = pd.concat([ratios_measured,ratios_modelled],axis=1)
+            ratios_summary.index = ratios_names
+            result[region][site] = ratios_summary
+    return result
+
+def model_observed_ratios_by_site(output_path,regions,site_list,annual_by_quality,only_good_quality=True):
+    ratio_tables = compute_model_observed_ratios(regions,site_list,annual_by_quality,only_good_quality)
+    for region in regions:
+        region_tables = ratio_tables[region]
+        print(region)
+
+        for site, ratios_summary in region_tables.items():
+            if ratios_summary is None:
+                continue
+            axx = pd.DataFrame(ratios_summary).plot(kind='bar',fontsize=8,color=['dodgerblue','tomato'],edgecolor='black')
+
+            axx.set_ylabel("Ratios", size = 8)
+            axx.legend(['Monitored','Modelled'],ncol=2,fontsize=8)
+            #plt.text(-0.5,-1,'PN:TSS and PP:TSS ratios are in t/kt, while others ratios are in t/t',fontsize = 10)
+
+
+            #axx.get_yaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
+
+            fig = plt.gcf()
+            fig.subplots_adjust(bottom=0.1,left=0.0,top=1.0,right=1.3)
+            # axx = fig.add_subplot(111)
+
+            if only_good_quality:
+                sub_dir = 'qualityData'
             else:
+                sub_dir = 'allData'
+            save_figure(os.path.join(output_path,region,'modelledVSmeasured',sub_dir,'ratios',site + '.png'))
 
-                measured = pd.DataFrame(averageAnnualSites.T[OBSERVATION_COLUMN]).T
-                modelled = pd.DataFrame(averageAnnualSites.T['Modelled']).T
-
-                ratios_measured = pd.DataFrame([
-                                   measured['PN (t/yr)']/measured['TSS (kt/yr)'],
-                                   measured['PN (t/yr)']/measured['TN (t/yr)'],
-                                   measured['DIN (t/yr)']/measured['TN (t/yr)'],
-                                   measured['DON (t/yr)']/measured['TN (t/yr)'],
-                                   measured['PP (t/yr)']/measured['TSS (kt/yr)'],
-                                   measured['PP (t/yr)']/measured['TP (t/yr)'],
-                                   measured['DIP (t/yr)']/measured['TP (t/yr)'],
-                                   measured['DOP (t/yr)']/measured['TP (t/yr)']
-                                  ])
-
-                ratios_modelled = pd.DataFrame([
-                                   modelled['PN (t/yr)']/modelled['TSS (kt/yr)'],
-                                   modelled['PN (t/yr)']/modelled['TN (t/yr)'],
-                                   modelled['DIN (t/yr)']/modelled['TN (t/yr)'],
-                                   modelled['DON (t/yr)']/modelled['TN (t/yr)'],
-                                   modelled['PP (t/yr)']/modelled['TSS (kt/yr)'],
-                                   modelled['PP (t/yr)']/modelled['TP (t/yr)'],
-                                   modelled['DIP (t/yr)']/modelled['TP (t/yr)'],
-                                   modelled['DOP (t/yr)']/modelled['TP (t/yr)']
-                                  ])
-
-                ratios_summary = pd.concat([ratios_measured,ratios_modelled],axis=1)
-                ratios_summary.index = ratios_names
-
-                #ratios_summary.to_csv(site + '_ratios.csv')
-
-
-                axx = pd.DataFrame(ratios_summary).plot(kind='bar',fontsize=8,color=['dodgerblue','tomato'],edgecolor='black')
-
-                axx.set_ylabel("Ratios", size = 8)
-                axx.legend(['Monitored','Modelled'],ncol=2,fontsize=8)
-                #plt.text(-0.5,-1,'PN:TSS and PP:TSS ratios are in t/kt, while others ratios are in t/t',fontsize = 10)
-
-
-                #axx.get_yaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
-
-                fig = plt.gcf()
-                fig.subplots_adjust(bottom=0.1,left=0.0,top=1.0,right=1.3)
-               # axx = fig.add_subplot(111)
-
-                if only_good_quality:
-                    sub_dir = 'qualityData'
-                else:
-                    sub_dir = 'allData'
-                save_figure(os.path.join(output_path,region,'modelledVSmeasured',sub_dir,'ratios',site + '.png'))
-
-def average_annual_comparisons(output_path,regions,site_list,annual_by_quality):
+def average_annual_comparisons(regions,site_list,annual_by_quality):
+    result = {}
     for filter_data in [True,False]:
         q = 'yes' if filter_data else 'no'
         print(q)
-
+        result[q] = {}
         for region in regions:
             print(region)
-
+            result[q][region] = {}
             sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
 
             measuredSites = sitesOfInterest
@@ -1667,13 +1695,33 @@ def average_annual_comparisons(output_path,regions,site_list,annual_by_quality):
                 averageAnnualSites = pd.DataFrame(averageAnnualsBySites)
                 averageAnnualSites = averageAnnualSites.fillna(0)
                 averageAnnualSites = averageAnnualSites.T
-                averageAnnualSites.columns = ['', '','','','','','','','','']  #,''
+                averageAnnualSites.columns = ['Flow (GL/yr)', 'TSS (kt/yr)','TN (t/yr)','PN (t/yr)','DIN (t/yr)','DON (t/yr)','TP (t/yr)','PP (t/yr)','DIP (t/yr)','DOP (t/yr)']  #, 'PSII TE (kg/yr)'
 
                 if averageAnnualSites.sum().sum() == 0:
+                    result[q][region][site] = None
                     continue
+                result[q][region][site] = averageAnnualSites
 
-                else:
-                    axx = pd.DataFrame(averageAnnualSites[0:2].T).plot(kind='bar',fontsize=8,color=['dodgerblue','tomato'],edgecolor='black')
+    return result
+
+def plot_average_annual_comparisons(output_path,regions,site_list,annual_by_quality):
+    comparisons = average_annual_comparisons(regions,site_list,annual_by_quality)
+    for filter_data in [True,False]:
+        q = 'yes' if filter_data else 'no'
+        print(q)
+
+        for region, region_data in comparisons[q].items():
+            print(region)
+
+            for site, site_data in region_data.items():
+                print(site)
+
+                averageAnnualSites = site_data
+                if averageAnnualSites is None:
+                    continue
+                columns = averageAnnualSites.columns[:]
+                averageAnnualSites.columns = ['', '','','','','','','','','']  #,''
+                axx = pd.DataFrame(averageAnnualSites[0:2].T).plot(kind='bar',fontsize=8,color=['dodgerblue','tomato'],edgecolor='black')
 
                 axx.set_ylabel("Flow and Loads", size = 8)
                 axx.legend(['Monitored','Modelled'],ncol=2,fontsize=8)
@@ -1706,15 +1754,14 @@ def average_annual_comparisons(output_path,regions,site_list,annual_by_quality):
                     sub_dir = 'allData'
                 save_figure(os.path.join(output_path,region,'modelledVSmeasured',sub_dir,'averageAnnuals','bySites','averageAnnuals_' + site + '.png'))
 
-def average_annual_comparison_at_regional_sites(output_path,regions,site_list,paras_compare,annual_by_quality,xticks_by_region):
-    ### Plots average annuals by Constituents for all regional sites
-
+def average_annual_comparison_at_regional_sites(regions,site_list,annual_by_quality):
+    result = {}
     for q in ['yes','no'][0:1]:
         print(q)
-
+        result[q] = {}
         for para in PARAS_COMPARE_LATEST:
             print(para)
-            averageAnnualParas = {para: pd.DataFrame() for para in paras_compare}
+            result[q][para] = {}
 
             for region in regions:
                 print(region)
@@ -1743,10 +1790,32 @@ def average_annual_comparison_at_regional_sites(output_path,regions,site_list,pa
                 #axx = fig.add_subplot(3,2,num+1)
                 averageAnnualParas = averageAnnualParas.dropna()
 
-                if averageAnnualParas.empty == False:
-                    ax = pd.DataFrame(averageAnnualParas).plot(kind='bar',color=['dodgerblue','tomato'],edgecolor='black')
-                else:
+                if averageAnnualParas.empty:
+                    result[q][para][region] = None
                     continue
+
+                result[q][para][region] = averageAnnualParas
+
+    return result
+
+def plot_average_annual_comparison_at_regional_sites(output_path,regions,site_list,annual_by_quality,xticks_by_region):
+    ### Plots average annuals by Constituents for all regional sites
+    comparisons = average_annual_comparison_at_regional_sites(regions,site_list,annual_by_quality)
+    for q in ['yes','no'][0:1]:
+        print(q)
+        para_comparisons = comparisons[q]
+        for para, para_data in para_comparisons.items():
+            print(para)
+
+            for region, region_data in para_data.items():
+                print(region)
+                averageAnnualParas = region_data
+                if averageAnnualParas is None:
+                    continue
+                measuredSites = averageAnnualParas.index.tolist()
+                print(measuredSites)
+
+                ax = pd.DataFrame(averageAnnualParas).plot(kind='bar',color=['dodgerblue','tomato'],edgecolor='black')
 
                 print(averageAnnualParas)
 
@@ -1821,8 +1890,7 @@ def average_annuals_by_constituent_regional(output_path,regions,site_list,annual
 
             plt.close(fig)
 
-
-def calc_moriasi_stats(output_path,regions,constituents,site_list,annual_by_quality):
+def calc_moriasi_stats(regions,constituents,site_list,annual_by_quality):
     MORIASI_COLUMNS=[
         'Region','Site','Constituent',
         'RSR','RSR Rating',
@@ -1830,25 +1898,18 @@ def calc_moriasi_stats(output_path,regions,constituents,site_list,annual_by_qual
         'R2','R2 Rating',
         'PBias','PBias Rating'
     ]
-
+    result = {}
     for q in ['yes','no']:
-
-        filename_suffix='_quality_only' if q=='yes' else '_alldata'
-        site_directory='qualityData' if q=='yes' else 'allData'
+        result[q] = {}
 
         print(q)
 
-
-        Moriasi_stat_region_86_23 =  pd.DataFrame(columns=MORIASI_COLUMNS)
-        # Moriasi_stat_region_86_14 =  pd.DataFrame(columns=MORIASI_COLUMNS)
-
-
         for region in regions:
             print(region)
+            result[q][region] = {}
 
             sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
             measuredSites = sitesOfInterest
-
 
             sitesMoriasi = []
 
@@ -1932,20 +1993,47 @@ def calc_moriasi_stats(output_path,regions,constituents,site_list,annual_by_qual
                     # Append the values to the moriasi_stat
 
                     Moriasi_stat_site_86_23.loc[idx] = [region,site, constituent,RSR, rsr_rating, nse, nse_rating ,r2, r2_rating , pbias, pbias_rating ]
+                result[q][region][site] = Moriasi_stat_site_86_23
 
-                    Moriasi_stat_site_86_23.to_csv(os.path.join(output_path,region,'modelledVSmeasured',site_directory,'Moriasi',f'{site}_Moriasi_stats_86_14{filename_suffix}.csv'),index=False)
+    return result
+
+def report_calc_moriasi_stats(output_path,regions,constituents,site_list,annual_by_quality):
+    all_stats = calc_moriasi_stats(regions,constituents,site_list,annual_by_quality)
+    for q in ['yes','no']:
+
+        filename_suffix='_quality_only' if q=='yes' else '_alldata'
+        site_directory='qualityData' if q=='yes' else 'allData'
+
+        print(q)
+
+        Moriasi_stat_region_86_23 =  pd.DataFrame()
+
+        for region, region_data in all_stats[q].items():
+            print(region)
+
+            sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
+            measuredSites = sitesOfInterest
+
+            for site, site_data in region_data.items():
+
+                print(site)
+                ### 1986 to 2023
+
+                Moriasi_stat_site_86_23 =  site_data
+                Moriasi_stat_site_86_23.to_csv(os.path.join(output_path,region,'modelledVSmeasured',site_directory,'Moriasi',f'{site}_Moriasi_stats_86_14{filename_suffix}.csv'),index=False)
 
                 Moriasi_stat_region_86_23 = pd.concat([Moriasi_stat_region_86_23, Moriasi_stat_site_86_23])
 
         Moriasi_stat_region_86_23.to_csv(os.path.join(output_path,f'Moriasi_stats_reporting_period_86_23{filename_suffix}.csv'),index=False)
 
-def plot_annual_all_sites(output_path,regions,site_list,annual_by_quality):
+def compute_annual_comparisons_all_sites(regions,site_list,annual_by_quality):
+    result = {}
     for q in ['yes','no']:
         print(q)
-
+        result[q] = {}
         for region in regions:
             print (region)
-
+            result[q][region] = {}
             sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
             measuredSites = sitesOfInterest
 
@@ -1959,6 +2047,7 @@ def plot_annual_all_sites(output_path,regions,site_list,annual_by_quality):
                 print (site)
 
                     #summaryAnnualParas = {para: pd.DataFrame() for para in parasCompare_latest}
+                result[q][region][site] = {}
 
                 for para in PARAS_COMPARE_LATEST[:-1]:  #[0:1]
                     print (para)
@@ -1974,14 +2063,30 @@ def plot_annual_all_sites(output_path,regions,site_list,annual_by_quality):
                     compare = compare.T
                     compare['Avg. Annual'] = compare.T.dropna().mean()
                     compare = compare.T
+                    result[q][region][site][para] = compare
+    return result
 
+def plot_annual_all_sites(output_path,regions,site_list,annual_by_quality):
+    comparisons = compute_annual_comparisons_all_sites(regions,site_list,annual_by_quality)
+    for q in ['yes','no']:
+        print(q)
+        quality_data = comparisons[q]
+        for region, region_data in quality_data.items():
+            print (region)
+
+            for site, site_data in region_data.items():
+                print (site)
+
+                    #summaryAnnualParas = {para: pd.DataFrame() for para in parasCompare_latest}
+
+                for para in PARAS_COMPARE_LATEST[:-1]:  #[0:1]
+                    print (para)
+                    compare = site_data[para]
 
                     #axx = compare.dropna().plot(kind='bar',title= para + ' at ' + site)
                     axx = compare.dropna().plot(kind='bar')  #,title= para + ' at ' + site
 
     #                 compare.to_csv(reportcardOutputsPrefix + '//' + region + '//modelledVSmeasured//qualityData//' + 'annuals//' + site + para + 'annualComparions.csv')
-
-
 
                     if para == 'Flow':
                         axx.set_ylabel(para + ' (GL)',size=8)
@@ -2325,7 +2430,10 @@ def load_all_tables(ds,dfs,tag_names,**kwargs):
     for tag_value,collection in dfs.items():
         tags = kwargs.copy()
         tags[tag_name] = tag_value
-        if isinstance(collection,pd.DataFrame):
+        if collection is None:
+            continue
+        elif isinstance(collection,pd.DataFrame):
+            collection.index = collection.index.map(lambda s: str(s).replace('\n',' '))
             ds.add_table(collection,**tags)
         else:
             load_all_tables(ds,collection,tag_names,**tags)
@@ -2353,3 +2461,10 @@ def divide_dfs(numerators,denominators,fill_value=0.0):
             return df_num.div(df_denom.loc[:,df_denom.columns[0]])
         return df_num.div(df_denom,fill_value=fill_value)
     return process_two_sets_of_dfs(numerators,denominators,process)
+
+def relabel_quality(dfs):
+    relabelled = {}
+    for q, df in dfs.items():
+        label = 'good quality only' if q == 'yes' else 'all data'
+        relabelled[label] = df
+    return relabelled
