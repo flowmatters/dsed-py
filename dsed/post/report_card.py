@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-import moriasi
+from . import moriasi
 import spotpy
 import matplotlib
 import dsed.const as c
