@@ -71,20 +71,27 @@ def determine_num_years(results_dir:str):
 
 def map_run(param_fn:str,base_dir:str)->dict:
     rel_path = os.path.relpath(param_fn,base_dir)
+    path_parts = rel_path.replace(base_dir,'').split('/')
+    name = path_parts[0].upper()
+    if len(name)==2:
+        name = '_'.join([path_parts[0],path_parts[2]])
+        scenario = path_parts[2]
+    else:
+        if ('BASE' in name) or ('BL' in name):
+            scenario = 'baseline'
+        elif ('PREDEV' in name) or ('PD' in name):
+            scenario = 'predev'
+        else:
+            logger.info('Could not determine scenario from run name %s',name)
+            scenario = 'unknown'
     result = dict(model=rel_path.replace(base_dir,'')[:2],
-                  run=rel_path.replace(base_dir,'').split('/')[0],
+                  run=name,
+                  scenario=scenario,
                   parameters=param_fn,
                   raw=param_fn.replace(PARAM_FN,RAW_FN),
                   areas=param_fn.replace(PARAM_FN,AREAS_FN),
                   years=determine_num_years(os.path.dirname(param_fn)),
                   run_metadata=os.path.join(os.path.dirname(param_fn),RUN_METADATA_FN))
-    name = result['run'].upper()
-    if ('BASE' in name) or ('BL' in name):
-        result['scenario'] = 'baseline'
-    elif ('PREDEV' in name) or ('PD' in name):
-        result['scenario'] = 'predev'
-    else:
-        result['scenario'] = 'unknown'
     logger.info('Detected run %s:%s (%d years)',result['model'],result['scenario'],result['years'])
     return result
 
@@ -482,7 +489,7 @@ def prep_massbalance(run,reporting_areas,data_cache,dataset_path):
 
 def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None,
          network_data_dir:str=None,reporting_regions:str=None,reporting_levels:list=None,rsdr_reporting:str=None,parallel:int|Client=None,
-         model_parameter_index=None):
+         model_parameter_index=None,report_card_params=None):
     '''
     Prepares the dashboard data for the given source data directories
 
@@ -502,7 +509,8 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
         Field name in the reporting regions shapefile/GeoJSON to use for RSDR reporting
     parallel: bool or Client
         Whether to run the processing in parallel or not. Default is True. Uses Dask
-
+    report_card_params: dict
+        Parameters for building the report card datasets. See build_report_card_datasets() for details
     Notes:
     * Processes RSDRs if network_data_dir and reporting_regions are provided
     '''
@@ -530,7 +538,24 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
 
     runs = find_all_runs(source_data_directories)
     logger.info('Got %d runs',len(runs))
+    if len(runs)==0:
+        logger.error('No runs found, exiting')
+        return
+
     futures = []
+
+    if report_card_params is not None:
+        logger.info('Building report card datasets')
+        # build_report_card_datasets(source_data_directories[0],
+        #                            subcatchment_lut_fn=reporting_regions,
+        #                            **report_card_params,
+        #                            dashboard_data_dir=dashboard_data_dir)
+        futures.append(client.submit(build_report_card_datasets,
+                                    source_data_directories[0],
+                                    subcatchment_lut_fn=reporting_regions,
+                                    **report_card_params,
+                                    dashboard_data_dir=dashboard_data_dir
+                                    ))
 
     if network_data_dir and reporting_regions:
         logger.info('Processing RSDRs')
@@ -610,6 +635,17 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
             results.append(f.result())
 
     logger.info('Done')
+
+def build_report_card_datasets(source_data,site_list_fn,observed_loads_fn,constituents,core_constituents,
+                               fus_of_interest,num_years,subcatchment_lut_fn,
+                               overall_label,loads_obs_column,dashboard_data_dir):
+    logger.info('Building report card datasets')
+    from .post import report_card as rc
+    rc.progress = rc.nop
+    rc.OVERALL_REGION = overall_label
+    rc.OBSERVATION_COLUMN=loads_obs_column
+    rc.populate_load_comparisons(source_data,site_list_fn,observed_loads_fn,constituents,dashboard_data_dir)
+    rc.populate_overview_data(source_data,subcatchment_lut_fn,constituents,core_constituents,fus_of_interest,num_years,dashboard_data_dir)
 
 def host(dashboard_data_dir:str):
     port = 8765
