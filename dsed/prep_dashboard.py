@@ -70,8 +70,8 @@ def determine_num_years(results_dir:str):
     return run_info.yearsOfRecording
 
 def map_run(param_fn:str,base_dir:str)->dict:
-    rel_path = os.path.relpath(param_fn,base_dir)
-    path_parts = rel_path.replace(base_dir,'').split('/')
+    rel_path = os.path.relpath(param_fn,base_dir) # Will ensure consistent separators
+    path_parts = rel_path.replace(base_dir,'').split(os.sep)
     name = path_parts[0].upper()
     if len(name)==2:
         name = '_'.join([path_parts[0],path_parts[2]])
