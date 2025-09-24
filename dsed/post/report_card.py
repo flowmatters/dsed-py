@@ -239,6 +239,8 @@ def ensure_paths_have_files(paths):
 def identify_regions_and_models(main_path):
     regions = [d for d in os.listdir(main_path) if os.path.isdir(os.path.join(main_path,d))]
     runs = set()
+    assert len(regions), f'No regions found in {main_path}'
+    assert all(len(r)==2 for r in regions), f'Expected all region names to be 2 characters, found {regions}'
     for region in regions:
         model_path = os.path.join(main_path,region,'Model_Outputs')
         if not os.path.exists(model_path):
@@ -246,6 +248,7 @@ def identify_regions_and_models(main_path):
             continue
         runs.update(os.listdir(model_path))
     runs = list(runs)
+    assert len(runs), f'No model runs found in {main_path}'
     scenarios = [m.split('_')[0] for m in runs]
     report_cards = set([r.split('_')[-1] for r in runs])
     assert len(report_cards) == 1, f"Expected exactly one report card type, found {report_cards}"
