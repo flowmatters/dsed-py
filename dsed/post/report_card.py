@@ -1839,7 +1839,7 @@ def plot_average_annual_comparisons(output_path,regions,site_list,annual_by_qual
 def average_annual_comparison_at_regional_sites(site_list,annual_by_quality):
     regions = get_regions(site_list)
     result = {}
-    for q in ['yes','no'][0:1]:
+    for q in ['yes','no']:#[0:1]:
         progress(q)
         result[q] = {}
         for para in PARAS_COMPARE_LATEST:

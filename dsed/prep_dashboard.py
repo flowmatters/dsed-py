@@ -343,6 +343,11 @@ def subcatchment_totals(results):
     return grouped
 
 def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None,reporting_levels:list=None):
+    if len(runs)==1:
+        logger.info('Processing single run %s',run_label(runs[0]))
+    else:
+        logger.info('Processing %d runs',len(runs))
+
     if reporting_regions is not None:
         logger.info('Processing reporting regions')
         reporting_regions = load_reporting_regions(reporting_regions,reporting_levels)
