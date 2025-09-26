@@ -57,11 +57,13 @@ TRANSFORMS={
     'parameters':compute_streambank_parameters
 }
 
+DEFAULT_REPORTING_LEVELS = ['Region','Basin_35','MU_48','WQI_Cal']
+
 def load_reporting_regions(reporting_regions:str,reporting_levels:list):
     if isinstance(reporting_regions,str):
         reporting_regions = gpd.read_file(reporting_regions)
     if reporting_levels is None:
-        reporting_levels = ['Region','Basin_35','MU_48','WQI_Cal']
+        reporting_levels = DEFAULT_REPORTING_LEVELS
     reporting_regions = reporting_regions[['SUBCAT']+reporting_levels]
     return reporting_regions
 
@@ -331,6 +333,29 @@ def process_link_results(link_results,parameters):
 
     return link_results
 
+def process_storage_trapping(raw,storage_list):
+    if storage_list is None:
+        logger.warning('No storage list provided, calculating trapping efficiency for all nodes')
+        storage_results = raw[raw.FEATURE_TYPE=='Node']
+    else:
+        storage_results = raw[raw.CATCHMENT.isin(storage_list)]
+    if not len(storage_results):
+        logger.warning('No storage results found')
+        return pd.DataFrame()
+
+    pivot_index=['REGION','SCENARIO','CATCHMENT','Constituent','FEATURE_TYPE']
+    pivot_index = list(pivot_index)
+    stats = pd.pivot_table(storage_results,index=pivot_index,columns='Process',values='Total_Load_in_Kg',aggfunc='sum',fill_value=0.0)
+    if any(col not in stats.columns for col in ['Loss','Residual','Yield']):
+        logger.warning('Not all of Loss, Residual and Yield present in storage results, skipping trapping efficiency calculation')
+        return pd.DataFrame()
+    stats['Trapping Efficiency'] = 100.0 * (1 - stats["Yield"]/(stats["Loss"]+stats["Residual"]+stats["Yield"]))
+    rows = pd.melt(stats.reset_index(),id_vars=pivot_index,value_name='Total_Load_in_Kg',var_name='BudgetElement')
+    result = rows[rows.BudgetElement.isin(['Trapping Efficiency'])]
+    result['Process'] = 'Storage Trapping'
+
+    return result
+
 def subcatchment_totals(results):
     grouped = results.groupby(['REGION','SCENARIO','CATCHMENT','Constituent','Process','BudgetElement']).agg(
         {
@@ -342,7 +367,7 @@ def subcatchment_totals(results):
     grouped['FEATURE_TYPE'] = 'Catchment'
     return grouped
 
-def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None,reporting_levels:list=None):
+def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None,reporting_levels:list=None,storage_list=None):
     if len(runs)==1:
         logger.info('Processing single run %s',run_label(runs[0]))
     else:
@@ -409,7 +434,9 @@ def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None
     link_results = process_link_results(link_results,parameters)
     all_tables['link_results'] = link_results
 
-    raw = pd.concat([fu_results,link_results,other_results])
+    storage_results = process_storage_trapping(raw,storage_list)
+
+    raw = pd.concat([fu_results,link_results,other_results,storage_results])
     raw = add_key(raw)
     raw = raw.dropna(subset=[RESULTS_VALUE_COLUMN])
     raw = classify_results(raw,parameters,model_parameter_index,nest_dask_jobs)
@@ -494,7 +521,7 @@ def prep_massbalance(run,reporting_areas,data_cache,dataset_path):
 
 def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None,
          network_data_dir:str=None,reporting_regions:str=None,reporting_levels:list=None,rsdr_reporting:str=None,parallel:int|Client=None,
-         model_parameter_index=None,report_card_params=None):
+         model_parameter_index=None,report_card_params=None,storage_list=None):
     '''
     Prepares the dashboard data for the given source data directories
 
@@ -519,6 +546,9 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     Notes:
     * Processes RSDRs if network_data_dir and reporting_regions are provided
     '''
+    if isinstance(storage_list,str):
+        storage_list = pd.read_csv(storage_list,index_col=0).index.tolist()
+
     if isinstance(parallel,int):
         logger.info('Creating local Dask cluster with %d workers',parallel)
         cluster = LocalCluster(n_workers=parallel,threads_per_worker=1)
@@ -570,7 +600,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     main_jobs = []
     for run in runs:
         logger.info('Run %s',run_label(run))
-        main_jobs.append(client.submit(process_run_data,[run],data_cache,NEST_DASK_JOBS,reporting_regions,reporting_levels))
+        main_jobs.append(client.submit(process_run_data,[run],data_cache,NEST_DASK_JOBS,reporting_regions,reporting_levels,storage_list))
 
     logger.info('Combining all tables')
     def create_main_datasets(model_parameter_index,*all_results):
