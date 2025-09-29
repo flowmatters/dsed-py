@@ -1278,12 +1278,15 @@ def collate_measured_annual_regions(gbrclmp_file, site_list):
     measured_annual_regions = {region: {} for region in region_list}
     gbrclmp_data = pd.read_csv(gbrclmp_file, header=0)
     for region in region_list:
-        sites_of_interest = site_list[site_list['NRM_short'] == region]['Station']
+        sites_of_interest = site_list[site_list['NRM_short'] == region][['Station', 'Name_in_Source']]
         measured_sites = sites_of_interest
         measured_annual_sites = {}
-        for site in measured_sites:
+        for row in measured_sites.itertuples():
+            site = row.Station
+            node_name = row.Name_in_Source
+
             columns = ['RepresentivityRating', 'Flow', 'TSS', 'TN', 'PN', 'NOX', 'NH4', 'DIN', 'DON', 'TP', 'PP', 'DIP', 'DOP']
-            annual_load_temp = gbrclmp_data[gbrclmp_data['Site Code'] == site]
+            annual_load_temp = gbrclmp_data[gbrclmp_data['Node'] == node_name]
             annual_load_temp = annual_load_temp.set_index(['Year'])
             annual_load_temp = annual_load_temp[columns]
             measured_annual_sites[site] = pd.DataFrame(annual_load_temp)
