@@ -49,6 +49,18 @@ progress=print
 def nop(*args, **kwargs):
     pass
 
+def read_csv(fn, *args, **kwargs):
+    directory = os.path.dirname(fn)
+    filename_pattern = os.path.basename(fn)
+    filename_lower = filename_pattern.lower()
+    for root, _, files in os.walk(directory):
+        for file in files:
+            if file.lower() == filename_lower:
+                file_path = os.path.join(root, file)
+                return pd.read_csv(file_path, *args, **kwargs)
+    logger.warning(f"File matching '{filename_pattern}' not found in '{directory}' (case-insensitive).")
+    return None
+
 def save_figure(fn):
     plt.savefig(fn,dpi=200,bbox_inches="tight")
     plt.clf()
@@ -100,7 +112,7 @@ def load_model_results(main_path,region,model,result):
     if not os.path.exists(fn):
         logger.warning('Run (%s/%s) exists but results file does not: %s',region,model,result)
         return None
-    result = pd.read_csv(fn,header=0)
+    result = read_csv(fn,header=0)
     return result
 
 def process_all_dfs(dfs,process):
@@ -494,7 +506,7 @@ def region_source_sink_summary(main_path,regions,models,rc):
 
         result[region] = {}
 
-        regLUT = pd.read_csv(getRegion_cat_node_link_Path(main_path,region))
+        regLUT = read_csv(getRegion_cat_node_link_Path(main_path,region))
         #regLUT.rename(columns={'SUBCAT': 'ModelElement'}, inplace=True)
 
         #REGCONTRIBUTIONDATAGRIDS[region] = {model: pd.DataFrame() for model in models}
@@ -705,7 +717,7 @@ def stream_lengths(main_path,regions,region_names,rc):
         progress(region)
         parameterTable = load_model_results(main_path,region,'BASE_'+rc,'ParameterTable.csv')
         # paramterTable_fil = modelResultsPrefix + REGIONs[REGIONs.index(region)] + '//Model_Outputs//'  + 'BASE' + '_' + RC + '//ParameterTable.csv'
-        # paramterTable = pd.read_csv(paramterTable_fil,header=0,usecols=[0,1,2,3,4,5,6])
+        # paramterTable = read_csv(paramterTable_fil,header=0,usecols=[0,1,2,3,4,5,6])
 
         lengths = pd.DataFrame(parameterTable[parameterTable['PARAMETER']=='Link Length']['VALUE'])
         lengths['VALUE'] = pd.to_numeric(lengths.VALUE)
@@ -1360,7 +1372,7 @@ def collate_modelled_annual_regions(main_path,site_list,comparison_run):
                     suffix = paras_compare_suffixes[1]
                     c_fn = constituent
                 fn = os.path.join(model_results_dir(main_path, region, comparison_run), 'TimeSeries', constituent, f"{c_fn}_{site}{suffix}.csv")
-                return pd.read_csv(fn, header=0)
+                return read_csv(fn, header=0)
 
             TSS = read_constituent(paras_compare[0])
             PN = read_constituent(paras_compare[1])
