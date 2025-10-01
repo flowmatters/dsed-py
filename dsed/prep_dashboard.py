@@ -671,7 +671,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
 
     logger.info('Done')
 
-def build_report_card_datasets(source_data,site_list_fn,observed_loads_fn,constituents,core_constituents,
+def build_report_card_datasets(source_data,observed_loads_fn,constituents,core_constituents,
                                fus_of_interest,num_years,subcatchment_lut_fn,
                                overall_label,loads_obs_column,dashboard_data_dir):
     logger.info('Building report card datasets')
@@ -679,7 +679,7 @@ def build_report_card_datasets(source_data,site_list_fn,observed_loads_fn,consti
     rc.progress = rc.nop
     rc.OVERALL_REGION = overall_label
     rc.OBSERVATION_COLUMN=loads_obs_column
-    rc.populate_load_comparisons(source_data,site_list_fn,observed_loads_fn,constituents,dashboard_data_dir)
+    rc.populate_load_comparisons(source_data,observed_loads_fn,constituents,dashboard_data_dir)
     rc.populate_overview_data(source_data,subcatchment_lut_fn,constituents,core_constituents,fus_of_interest,num_years,dashboard_data_dir)
 
 def host(dashboard_data_dir:str):

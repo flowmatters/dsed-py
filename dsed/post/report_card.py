@@ -84,8 +84,8 @@ def rename_constituents(df):
     df['Constituent'] = df['Constituent'].replace(CONSTITUENT_REPORTING_NAMES)
     return df
 
-def get_regions(site_list):
-    return list(site_list['NRM_short'].unique())
+def get_regions(loads_data):
+    return list(loads_data['Region'].unique())
 
 def filter_for_good_quality_observations(df,copy=True):
     result = df[df['RepresentivityRating'].isin(['Excellent','Good','Moderate'])]
@@ -1285,20 +1285,19 @@ def plot_land_use_exports(output_path,regions,constituents,region_export_by_fu,r
 
 
 # migrated by copilot
-def collate_measured_annual_regions(gbrclmp_file, site_list):
-    region_list = get_regions(site_list)
+def collate_measured_annual_regions(loads_data):
+    region_list = get_regions(loads_data)
     measured_annual_regions = {region: {} for region in region_list}
-    gbrclmp_data = pd.read_csv(gbrclmp_file, header=0)
     for region in region_list:
-        sites_of_interest = site_list[site_list['NRM_short'] == region][['Station', 'Name_in_Source']]
+        sites_of_interest = loads_data[loads_data['Region'] == region][['Site Code', 'Node']]
         measured_sites = sites_of_interest
         measured_annual_sites = {}
-        for row in measured_sites.itertuples():
-            site = row.Station
-            node_name = row.Name_in_Source
+        for _,row in measured_sites.iterrows():
+            node_name = row['Node']
+            site = row['Site Code']
 
             columns = ['RepresentivityRating', 'Flow', 'TSS', 'TN', 'PN', 'NOX', 'NH4', 'DIN', 'DON', 'TP', 'PP', 'DIP', 'DOP']
-            annual_load_temp = gbrclmp_data[gbrclmp_data['Node'] == node_name]
+            annual_load_temp = loads_data[loads_data['Node'] == node_name]
             annual_load_temp = annual_load_temp.set_index(['Year'])
             annual_load_temp = annual_load_temp[columns]
             measured_annual_sites[site] = pd.DataFrame(annual_load_temp)
@@ -1314,8 +1313,8 @@ def build_annual_comparison_by_quality(region_list, measured_annual_regions, sit
         result_df_annual = pd.DataFrame()
         summary_annual_regions = {region: pd.DataFrame() for region in region_list}
         for region in region_list:
-            measured_sites = site_list[site_list['NRM_short'] == region]['Station'].tolist()
-            modelled_sites = site_list[site_list['NRM_short'] == region]['Name_in_Source'].tolist()
+            measured_sites = site_list[site_list['Region'] == region]['Site Code'].tolist()
+            modelled_sites = site_list[site_list['Region'] == region]['Node'].tolist()
             for idx, con in enumerate(paras_compare):
                 for idx_site, site in enumerate(measured_sites):
                     Node_in_source = modelled_sites[idx_site]
@@ -1358,11 +1357,16 @@ def collate_modelled_annual_regions(main_path,site_list,comparison_run):
             return f'{y-1}-{y}'
         return f'{y}-{y+1}'
     for region in region_list:
-        measured_sites = site_list[site_list['NRM_short'] == region]['Station'].tolist()
-        modelled_sites = site_list[site_list['NRM_short'] == region]['Name_in_Source'].tolist()
+        region_data = site_list[site_list['Region'] == region]
+        measured_sites = region_data['Site Code'].tolist()
+        modelled_sites = region_data['Node'].tolist()
         modelled_daily_sites = {site: pd.DataFrame() for site in measured_sites}
         modelled_annual_sites = {site: pd.DataFrame() for site in measured_sites}
-        for site in modelled_sites:
+        for site, site_code in zip(modelled_sites, measured_sites):
+            if site is None:
+                logger.error('Site is None in region %s. site code: %s', region, site_code)
+                continue
+                # raise ValueError('Site is None')
             # Build file paths
             def read_constituent(constituent):
                 if constituent == 'Flows':
@@ -1382,6 +1386,9 @@ def collate_modelled_annual_regions(main_path,site_list,comparison_run):
             DIP = read_constituent(paras_compare[5])
             DOP = read_constituent(paras_compare[6])
             Flow = read_constituent(paras_compare[7])
+            if any(df is None for df in [TSS, PN, DIN, DON, PP, DIP, DOP, Flow]):
+                logger.error('One of the constituent files is missing for site %s in region %s', site, region)
+                continue
             # Assign variables
             Date = np.array(Flow['Date'])
             Flow_arr = np.array(Flow[Flow.columns[1]]) * c.CUMECS_TO_ML_DAY
@@ -1586,19 +1593,33 @@ def summarise_annual_observations(site_list,modelled_annual_by_region,measured_a
 
     for region in regions:
         progress (region)
-        sitesOfInterest = site_list[site_list['NRM_short']==region]['Station']
-        measuredSites = sitesOfInterest
+        measuredSites = site_list[site_list['Region']==region]['Site Code']
+        modelled_sites = site_list[site_list['Region']==region]['Node']
         summaryAnnualSites = {site: pd.DataFrame() for site in measuredSites}
-
+        region_modelled = modelled_annual_by_region[region]
+        region_measured = measured_annual_by_region[region]
         #summaryAnnualSites = {site: pd.DataFrame() for site in parasCompare_latest}
 
-        for site in measuredSites:
+        for site, modelled_site_name in zip(measuredSites, modelled_sites):
             progress (site)
+            if modelled_site_name is None:
+                logger.warning('No model node name corresponding to site %s in region %s', site, region) 
+                continue
+                # raise ValueError('Site is None')
+            site_modelled = region_modelled[site]
+            if site_modelled is None or site_modelled.empty:
+                logger.info('No modelled data for %s/%s', region, site)
+                continue
+
+            site_measured = region_measured[site]
             summaryAnnualParas = {para: pd.DataFrame() for para in PARAS_COMPARE_LATEST}
 
             for para in PARAS_COMPARE_LATEST:
                 progress (para)
-                modelled = modelled_annual_by_region[region][site][para]
+                if not para in site_modelled:
+                    logger.info('No modelled data for %s/%s/%s', region, site, para)
+                    # continue
+                modelled = site_modelled[para]
 
                 ###Use the below command if the measured is not filtering by representivity rating
                 #measured = measuredAnnualRegions[region][site][para]
@@ -1607,12 +1628,12 @@ def summarise_annual_observations(site_list,modelled_annual_by_region,measured_a
                 #### ONLY to filter Excellent, Good & Moderate Representative ratings from observed data (neglect Indicative)
 
                 if only_good_quality:
-                    measured = filter_for_good_quality_observations(measured_annual_by_region[region][site])[para]
+                    measured = filter_for_good_quality_observations(site_measured)[para]
                     if measured.count() < 3:
                         logger.info('Insufficient "good" quality observations. Skipping %s/%s/%s', region, site, para)
                         continue
                 else:
-                    measured = measured_annual_by_region[region][site][para]
+                    measured = site_measured[para]
 
                 # Ensure each year only appears once (take mean if duplicates exist)
                 measured = measured.groupby(level=0).mean()
@@ -1663,20 +1684,23 @@ def compute_model_observed_ratios(site_list,annual_by_quality,only_good_quality=
         progress(region)
         result[region] = {}
         q = 'yes' if only_good_quality else 'no'
-        sitesOfInterest = site_list[site_list['NRM_short']==region]['Station']
-
-        measuredSites = sitesOfInterest
+        measuredSites = site_list[site_list['Region']==region]['Site Code']
+        region_data = annual_by_quality[q][region]
 
         for site in measuredSites:
             averageAnnualsBySites = []
             progress(site)
+            site_data = region_data[site]
+            if site_data is None or not len(site_data):
+                logger.info('No data for %s/%s', region, site)
+                result[region][site] = None
+                continue
 
             for para in PARAS_COMPARE_LATEST:
                 progress(para)
 
-                summaryAnnual_temp = annual_by_quality[q][region]
-
-                annuals = summaryAnnual_temp[site][para]
+                # summaryAnnual_temp = annual_by_quality[q][region]
+                annuals = site_data[para]
                 nonNaNs = annuals.dropna()
                 averageAnnual = nonNaNs.mean()
                 numYears = nonNaNs.count()
@@ -1767,20 +1791,24 @@ def average_annual_comparisons(site_list,annual_by_quality):
         for region in regions:
             progress(region)
             result[q][region] = {}
-            sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
-
-            measuredSites = sitesOfInterest
+            measuredSites = site_list[site_list['Region'] == region]['Site Code'].tolist()
+            region_data = annual_by_quality[q][region]
 
             for site in measuredSites:
                 averageAnnualsBySites = []
                 progress(site)
+                site_data = region_data[site]
+
+                if site_data is None or not len(site_data):
+                    logger.info('No data for %s/%s', region, site)
+                    result[q][region][site] = None
+                    continue
 
                 for para in PARAS_COMPARE_LATEST:
                     progress(para)
 
-                    summaryAnnual_temp = annual_by_quality[q][region]
 
-                    annuals = summaryAnnual_temp[site][para]
+                    annuals = site_data[para]
                     nonNaNs = annuals.dropna()
                     averageAnnual = nonNaNs.mean()
                     numYears = nonNaNs.count()
@@ -1863,8 +1891,9 @@ def average_annual_comparison_at_regional_sites(site_list,annual_by_quality):
 
             for region in regions:
                 progress(region)
+                region_data = annual_by_quality[q][region]
 
-                sitesOfInterest = pd.DataFrame(site_list[site_list['NRM_short'] == region]['Station'].tolist())
+                sitesOfInterest = pd.DataFrame(site_list[site_list['Region'] == region]['Site Code'].tolist())
                 sitesOfInterest.columns = ['Sname']
                 sitesOfInterest = sitesOfInterest.sort_values('Sname')
                 sitesOfInterest = sitesOfInterest['Sname'].tolist()
@@ -1873,17 +1902,22 @@ def average_annual_comparison_at_regional_sites(site_list,annual_by_quality):
                 progress(measuredSites)
 
                 averageAnnualsByParas = []
+                valid_sites = []
 
                 for site in measuredSites:
                     progress(site)
-
-                    annuals = annual_by_quality[q][region][site][para]
+                    site_data = region_data[site]
+                    if site_data is None or not len(site_data):
+                        logger.info('No data for %s/%s', region, site)
+                        continue
+                    valid_sites.append(site)
+                    annuals = site_data[para]
                     averageAnnual = annuals.dropna().mean()
 
                     averageAnnualsByParas.append(averageAnnual)
 
                 averageAnnualParas = pd.DataFrame(averageAnnualsByParas)
-                averageAnnualParas.index = measuredSites
+                averageAnnualParas.index = valid_sites
                 num = regions.index(region)
                 #axx = fig.add_subplot(3,2,num+1)
                 averageAnnualParas = averageAnnualParas.dropna()
@@ -1949,7 +1983,7 @@ def average_annuals_by_constituent_regional(output_path,regions,site_list,annual
 
             for region_idx, region in enumerate(regions):
                 measuredSites = site_list.loc[
-                    site_list['NRM_short'] == region, 'Station'
+                    site_list['Region'] == region, 'Site Code'
                 ].sort_values().tolist()
 
                 averageAnnualsByParas = []
@@ -2007,7 +2041,7 @@ def calc_moriasi_stats(constituents,site_list,annual_by_quality):
             progress(region)
             result[q][region] = {}
 
-            sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
+            sitesOfInterest = site_list[site_list['Region'] == region]['Site Code'].tolist()
             measuredSites = sitesOfInterest
 
             sitesMoriasi = []
@@ -2110,7 +2144,7 @@ def report_calc_moriasi_stats(output_path,regions,constituents,site_list,annual_
         for region, region_data in all_stats[q].items():
             progress(region)
 
-            sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
+            sitesOfInterest = site_list[site_list['Region'] == region]['Site Code'].tolist()
             measuredSites = sitesOfInterest
 
             for site, site_data in region_data.items():
@@ -2134,13 +2168,13 @@ def compute_annual_comparisons_all_sites(site_list,annual_by_quality):
         for region in regions:
             progress (region)
             result[q][region] = {}
-            sitesOfInterest = site_list[site_list['NRM_short'] == region]['Station'].tolist()
-            measuredSites = sitesOfInterest
-
+            measuredSites = site_list[site_list['Region'] == region]['Site Code'].tolist()
+            region_data = annual_by_quality[q][region]
             sitesAnnual = []
             for site in measuredSites:
                 # progress(site)
-                if not annual_by_quality[q][region][site]['Flow'].empty:
+                site_data = region_data[site]
+                if 'Flow' in site_data and not site_data['Flow'].empty:
                     sitesAnnual.append(site)
 
             for site in sitesAnnual:
@@ -2581,14 +2615,29 @@ def relabel_quality(dfs):
     return relabelled
 
 
+def build_site_list(loads_data):
+    site_list = loads_data.groupby(['Site Code']).first().reset_index()
+    return site_list[['Region', 'Site Code', 'Node', 'Display Name']]
+
+def load_observed_loads(loads_data_fn):
+    loads = read_csv(loads_data_fn,header=0)
+    replacements = {}
+    for _, group in loads.groupby('Node'):
+        codes = list(set(group['Site Code']))
+        if len(codes)>1:
+            for c in codes[1:]:
+                replacements[c] = codes[0]
+    loads['Site Code'] = loads['Site Code'].replace(replacements)
+    return loads
 
 #### Dashboard Datasets
-def populate_load_comparisons(source_data,site_list_fn,loads_data_fn,constituents,dest_data):
+def populate_load_comparisons(source_data,loads_data_fn,constituents,dest_data):
     regions,runs,scenarios,report_card = identify_regions_and_models(source_data)
 
     compare_ds = hg.open_dataset(os.path.join(dest_data,'load-comparisons'),mode='w')
-    site_list = pd.read_csv(site_list_fn)
-    measured_annual_regions = collate_measured_annual_regions(loads_data_fn, site_list)
+    loads = load_observed_loads(loads_data_fn)
+    measured_annual_regions = collate_measured_annual_regions(loads)
+    site_list = build_site_list(loads)
     # Collate modelled annual regions using refactored function
     modelled_daily_regions, modelled_annual_regions = collate_modelled_annual_regions(source_data, site_list, f'BASE_{report_card}')
     summaryAnnualRegions_quality = summarise_annual_observations(site_list,modelled_annual_regions,measured_annual_regions)
