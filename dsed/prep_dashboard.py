@@ -493,11 +493,44 @@ def build_rsdr_dataset(dashboard_data_dir:str,runs:list,network_data_dir:str,rep
     result = client.submit(store_rsdr_results,runs,dashboard_data_dir,*jobs)
     return result
 
-def prep_massbalance(run,reporting_areas,data_cache,dataset_path):
+def prep_massbalance(run,reporting_areas,data_cache,dataset_path,network_data_dir=None):
     ds = hg.open_dataset(dataset_path,mode=hg.MODE_WRITE_NO_INDEX)
     reporting_levels = reporting_areas.columns[1:]
     raw = read_csv(run['raw'],data_cache)
     augment_table(raw,run)
+    node_names = []
+    if network_data_dir is not None:
+        # Attribute node fluxes to nearest catchment in order to report in appropriate regions.
+        # Try downstream first, then upstream if no downstream catchment found
+        import veneer
+        network_fn = glob(os.path.join(network_data_dir,f'{run["model"]}*network.json'))[0]
+        network = veneer.load_network(network_fn)
+        node_names = set(raw[(raw['FEATURE_TYPE']=='Node')&(raw['BudgetElement']!='Node Yield')]['CATCHMENT'])
+        for node_name in node_names:
+            try:
+                node = network.by_name(node_name)
+            except:
+                logger.error('Node %s not found in network %s for %s',node_name,network_fn,run['model'])
+                raise ValueError(f'Node {node_name} not found in network {network_fn} for {run["model"]}')
+            ds_links = network.downstream_links(node)
+            if len(ds_links)==0:
+                logger.error('No downstream links found for node %s in %s',node_name,run['model'])
+                raise ValueError(f'No downstream links found for node {node_name}')
+            catchments = [c for c in [network.catchment_for_link(l) for l in ds_links] if c is not None]
+            link_names = [l['properties']['name'] for l in ds_links]
+            if not len(catchments):
+                logger.warning('No catchment found for downstream link %s of node %s in %s',link_names,node_name,run['model'])
+                us_links = network.upstream_links(node)
+                link_names = [l['properties']['name'] for l in us_links]
+                catchments = [c for c in [network.catchment_for_link(l) for l in us_links] if c is not None]
+                if not len(catchments):
+                    logger.error('No catchment found for upstream links %s of node %s in %s',link_names,node_name,run['model'])
+                    raise ValueError(f'No catchment found for upstream or downstream link of node {node_name} in {run["model"]}')
+            if len(catchments)>1:
+                logger.warning('Multiple catchments found for node %s in %s, using first (%s)',node_name,run['model'],catchments[0]['properties']['name'])
+            catchment = catchments[0]['properties']['name']
+            raw.loc[(raw['FEATURE_TYPE']=='Node')&(raw['CATCHMENT']==node_name),'CATCHMENT'] = catchment
+
     mb_calc = MassBalanceBuilder(None,None)
     for level in reporting_levels:
         values = reporting_areas[level].dropna().unique()
@@ -648,7 +681,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     mb_jobs = []
     for run in runs:
         region_subset = reporting_regions_df[reporting_regions_df[reporting_levels[0]]==run['model']]
-        mb_jobs.append(client.submit(prep_massbalance,run,region_subset,data_cache,mb_dataset.path))
+        mb_jobs.append(client.submit(prep_massbalance,run,region_subset,data_cache,mb_dataset.path,network_data_dir))
 
     def combine_mb_indexes(*indexes):
         mb_dataset = open_hg('massbalance',hg.MODE_READ_WRITE)
