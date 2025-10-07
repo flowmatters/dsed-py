@@ -530,7 +530,7 @@ def prep_massbalance(run,reporting_areas,data_cache,dataset_path,network_data_di
                 logger.warning('Multiple catchments found for node %s in %s, using first (%s)',node_name,run['model'],catchments[0]['properties']['name'])
             catchment = catchments[0]['properties']['name']
             raw.loc[(raw['FEATURE_TYPE']=='Node')&(raw['CATCHMENT']==node_name),'CATCHMENT'] = catchment
-
+    
     mb_calc = MassBalanceBuilder(None,None)
     for level in reporting_levels:
         values = reporting_areas[level].dropna().unique()
@@ -704,7 +704,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
 
     logger.info('Done')
 
-def build_report_card_datasets(source_data,observed_loads_fn,constituents,core_constituents,
+def build_report_card_datasets(source_data,observed_loads_fn,constituents,
                                fus_of_interest,num_years,subcatchment_lut_fn,
                                overall_label,loads_obs_column,dashboard_data_dir):
     logger.info('Building report card datasets')
@@ -713,7 +713,7 @@ def build_report_card_datasets(source_data,observed_loads_fn,constituents,core_c
     rc.OVERALL_REGION = overall_label
     rc.OBSERVATION_COLUMN=loads_obs_column
     rc.populate_load_comparisons(source_data,observed_loads_fn,constituents,dashboard_data_dir)
-    rc.populate_overview_data(source_data,subcatchment_lut_fn,constituents,core_constituents,fus_of_interest,num_years,dashboard_data_dir)
+    rc.populate_overview_data(source_data,subcatchment_lut_fn,constituents,fus_of_interest,num_years,dashboard_data_dir)
 
 def host(dashboard_data_dir:str):
     port = 8765

@@ -403,41 +403,45 @@ def process_based_basin_export_tables(constituents,regional_contributor):
 
                 for con in constituents:
                     progress ('      ',con)
-                    result[region][model][basin][con] = data_summary3_Process.loc[con]['LoadToRegExport (kg)']
+                    constituent_data = pd.DataFrame(data_summary3_Process.loc[con]['LoadToRegExport (kg)']).T
 
+                    process_mapping = {}
                     if con in ['TSS','PN','PP']:
-                        result[region][model][basin][con] = pd.DataFrame(result[region][model][basin][con]).T
-
                         if con =='TSS':
-                            result[region][model][basin][con]['Hillslope'] = result[region][model][basin][con]['Hillslope surface soil'] + \
-                                                                                                   result[region][model][basin][con]['Undefined']
+                            process_mapping['Hillslope'] = ['Hillslope surface soil','Undefined']
                         elif con in ['PN','PP']:
-                            result[region][model][basin][con]['Hillslope'] = result[region][model][basin][con]['Hillslope no source distinction'] + \
-                                                                                                   result[region][model][basin][con]['Undefined']
+                            process_mapping['Hillslope'] = ['Hillslope no source distinction','Undefined']
 
-                        result[region][model][basin][con]['Streambank'] = result[region][model][basin][con]['Streambank']
-                        result[region][model][basin][con]['Gullyt'] = result[region][model][basin][con]['Gully']
-                        result[region][model][basin][con]['ChannelRemobilisation'] = result[region][model][basin][con]['Channel Remobilisation']
+                        process_mapping['Streambank'] = ['Streambank']
+                        process_mapping['Gully'] = ['Gully']
+                        process_mapping['ChannelRemobilisation'] = ['Channel Remobilisation']
 
-                        PROCESSsOfInterest = ['Hillslope','Streambank','Gully','ChannelRemobilisation']
+                        process_order = ['Hillslope','Streambank','Gully','ChannelRemobilisation']
 
-                    elif con=='DIN':
-                        result[region][model][basin][con] = pd.DataFrame(result[region][model][basin][con]).T
+                    # elif con=='DIN':
+                    else:
+                        process_mapping['SurfaceRunoff'] = ['Undefined','Diffuse Dissolved','Hillslope no source distinction']
 
-                        result[region][model][basin][con]['SurfaceRunoff'] = result[region][model][basin][con]['Undefined'] + \
-                                                                             result[region][model][basin][con]['Diffuse Dissolved'] + \
-                                                                             result[region][model][basin][con]['Hillslope no source distinction']
-
-                        if 'Seepage' in result[region][model][basin][con].columns:
-                            result[region][model][basin][con]['Seepage'] = result[region][model][basin][con]['Seepage']
+                        if 'Seepage' in constituent_data.columns:
+                            process_mapping['Seepage'] = ['Seepage']
                         else:
-                            result[region][model][basin][con]['Seepage'] = 0
+                            process_mapping['Seepage'] = []
 
-                        result[region][model][basin][con]['PointSource'] = result[region][model][basin][con]['Point Source']
+                        process_mapping['PointSource'] = ['Point Source']
 
-                        PROCESSsOfInterest = ['SurfaceRunoff','Seepage','PointSource']
+                        process_order = ['SurfaceRunoff','Seepage','PointSource']
 
-                    result[region][model][basin][con] = result[region][model][basin][con][PROCESSsOfInterest].T
+                    for new_process, old_processes in process_mapping.items():
+                        if not len(old_processes):
+                            constituent_data[new_process] = 0
+                            continue
+                        constituent_data[new_process] = constituent_data[old_processes].sum(axis=1)
+                        if np.isnan(constituent_data[new_process].iloc[0]):
+                            print(f"NaN found when mapping {old_processes} to {new_process} for {region} {model} {basin} {con}")
+                            print(constituent_data)
+                            assert False
+
+                    result[region][model][basin][con] = constituent_data[process_order].T
     return result
 
 def process_based_region_export_tables(regions,constituents,basin_export_by_process):
@@ -2672,12 +2676,12 @@ def populate_load_comparisons(source_data,loads_data_fn,constituents,dest_data):
     compare_ds.add_table(site_list_db,contextual='site-list')
 
 
-def populate_overview_data(source_data,subcatchment_lut,constituents,core_constituents,fus_of_interest,num_years,dest_data):
+def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_interest,num_years,dest_data):
     per_year = 1/num_years
     regions,runs,scenarios,report_card = identify_regions_and_models(source_data)
     overview_ds = hg.open_dataset(os.path.join(dest_data,'overview'),mode='w')
     REGCONTRIBUTIONDATAGRIDS = read_regional_contributor(source_data,subcatchment_lut)
-    BasinLoadToRegExport_Process = process_based_basin_export_tables(core_constituents,REGCONTRIBUTIONDATAGRIDS)
+    BasinLoadToRegExport_Process = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS)
     BasinLoadToRegExport_Process_PC = to_percentage_of_whole(BasinLoadToRegExport_Process)
     process_based_export = {
         '%': BasinLoadToRegExport_Process_PC,
