@@ -660,6 +660,10 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
             if len(grouping_keys):
                 for grouping, subset in full_tbl.groupby(grouping_keys):
                     tags = dict(zip(grouping_keys,grouping))
+                    flag_columns = [c for c in subset.columns if c.startswith('is_')]
+                    for col in flag_columns:
+                        any_true = bool(subset[col].any())
+                        tags[col.replace('is_','contains_')] = any_true
                     subset = subset.drop(columns=grouping_keys)
                     ds.add_table(subset,**tags)
             else:
