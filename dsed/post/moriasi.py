@@ -103,9 +103,9 @@ def pbias_rating (value,category):
     if v < ratings[0]:
         return 'Very good'
     if v < ratings[1]: 
-        rating = 'Good'
+        return 'Good'
     if v < ratings[2]: 
-        rating = 'Satisfactory'
+        return 'Satisfactory'
     return 'Unsatisfactory'
 
 def nse_rating (value,category):
