@@ -27,6 +27,9 @@ CLIMATE_FN='climateTable.csv'
 RESULTS_VALUE_COLUMN='Total_Load_in_Kg'
 RUN_METADATA_FN='DSScenarioRunInfo.xml'
 NEST_DASK_JOBS=False
+PARAMETERS_WHERE_ZERO_IS_NA=[
+    'Point Source Load (kg/y)',
+]
 
 SEDIMENT_BULK_DENSITY = 1.5 # g/cm^3
 
@@ -218,6 +221,12 @@ def clear_rows_for_zero_area_fus(df,fu_areas,column,keep_area=False):
         df = df.drop(columns='AREA')
     return df
 
+def drop_zero_values(parameter_df,parameters_where_zero_is_na):
+    df = parameter_df.copy()
+    df = df[~(df.PARAMETER.isin(parameters_where_zero_is_na)&(df.VALUE=='0'))]
+    return df
+
+
 def add_key(df):
     df['rcf'] = df['REGION']+'-'+df['CATCHMENT']+'-'+df['ELEMENT']
     df['rc'] = df['REGION']+'-'+df['CATCHMENT']
@@ -374,6 +383,7 @@ def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None
     # parameters = compute_derived_parameters(parameters)
     fu_params, other_params = split_fu_and_stream(parameters,fu_names)
     fu_params = clear_rows_for_zero_area_fus(fu_params,fu_areas,'VALUE')
+    other_params = drop_zero_values(other_params,PARAMETERS_WHERE_ZERO_IS_NA)
     parameters = pd.concat([fu_params,other_params])
 
     parameters = parameters[~parameters.PARAMETER.isin(['USLEmodel','GULLYmodel','Hydropower','OutletManager'])]
