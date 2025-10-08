@@ -561,6 +561,9 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
         Whether to run the processing in parallel or not. Default is True. Uses Dask
     report_card_params: dict
         Parameters for building the report card datasets. See build_report_card_datasets() for details
+    model_parameter_index: str or DataFrame
+        Optional model parameter index to use. If str, should be a CSV file path. Expected to contain default parameter values
+        If None, will be generated from the parameters in the source data, but will lack default values
     Notes:
     * Processes RSDRs if network_data_dir and reporting_regions are provided
     '''
@@ -657,9 +660,18 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
 
         logger.info('Creating indexes')
         ds = open_hg('indexes')
-        ds.add_table(model_parameter_index,role='model-parameter')
         ds.add_table(model_element_index,role='model-element')
         ds.add_table(reporting_regions_df,role='reporting-regions')
+
+        for marker in ['Dashboard','Constituent','FU']:
+            if marker in model_parameter_index.columns:
+                values = set(model_parameter_index[marker].dropna())
+                for v in values:
+                    model_parameter_index[v] = False
+                    model_parameter_index.loc[model_parameter_index[marker]==v,v] = True
+            model_parameter_index['DEFAULT WET'].fillna(model_parameter_index['DEFAULT'],inplace=True)
+        ds.add_table(model_parameter_index,role='model-parameter')
+
         return None
 
     reporting_regions_df = load_reporting_regions(reporting_regions,reporting_levels)
