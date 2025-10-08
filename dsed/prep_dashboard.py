@@ -30,6 +30,9 @@ NEST_DASK_JOBS=False
 PARAMETERS_WHERE_ZERO_IS_NA=[
     'Point Source Load (kg/y)',
 ]
+BUDGET_ELEMENTS_WHERE_ZERO_IS_NA=[
+    'Point Source'
+]
 
 SEDIMENT_BULK_DENSITY = 1.5 # g/cm^3
 
@@ -221,11 +224,15 @@ def clear_rows_for_zero_area_fus(df,fu_areas,column,keep_area=False):
         df = df.drop(columns='AREA')
     return df
 
-def drop_zero_values(parameter_df,parameters_where_zero_is_na):
+def drop_zero_parameters(parameter_df,parameters_where_zero_is_na):
     df = parameter_df.copy()
     df = df[~(df.PARAMETER.isin(parameters_where_zero_is_na)&(df.VALUE=='0'))]
     return df
 
+def drop_zero_results(results_df,budget_elements_where_zero_is_na):
+    df = results_df.copy()
+    df = df[~(df.BudgetElement.isin(budget_elements_where_zero_is_na)&(df[RESULTS_VALUE_COLUMN]==0))]
+    return df
 
 def add_key(df):
     df['rcf'] = df['REGION']+'-'+df['CATCHMENT']+'-'+df['ELEMENT']
@@ -383,7 +390,7 @@ def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None
     # parameters = compute_derived_parameters(parameters)
     fu_params, other_params = split_fu_and_stream(parameters,fu_names)
     fu_params = clear_rows_for_zero_area_fus(fu_params,fu_areas,'VALUE')
-    other_params = drop_zero_values(other_params,PARAMETERS_WHERE_ZERO_IS_NA)
+    other_params = drop_zero_parameters(other_params,PARAMETERS_WHERE_ZERO_IS_NA)
     parameters = pd.concat([fu_params,other_params])
 
     parameters = parameters[~parameters.PARAMETER.isin(['USLEmodel','GULLYmodel','Hydropower','OutletManager'])]
@@ -434,6 +441,7 @@ def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None
     raw = pd.concat([fu_results,link_results,other_results,storage_results])
     raw = add_key(raw)
     raw = raw.dropna(subset=[RESULTS_VALUE_COLUMN])
+    raw = drop_zero_results(raw,BUDGET_ELEMENTS_WHERE_ZERO_IS_NA)
     raw = classify_results(raw,parameters,model_parameter_index,nest_dask_jobs)
     raw = compute_generated_loads(raw,parameters)
     raw = raw.reset_index(drop=True)
