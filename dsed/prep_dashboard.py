@@ -13,6 +13,7 @@ from . import RunDetails
 from .const import M_TO_KM, G_TO_KG, CM3_TO_M3, M_TO_MM
 from .post import run_regional_contributor, back_calculate, MassBalanceBuilder
 from .post.streambank import compute_streambank_parameters
+from .util import read_source_csv
 from dask.distributed import Client, LocalCluster
 import dask.dataframe as dd
 import dask
@@ -130,18 +131,6 @@ def contains_matching_run(all_runs,run):
             return True
     return False
 
-def read_ragged_csv(fn):
-    logger.warning('Reading ragged CSV file %s',fn)
-    import csv
-
-    with open(fn,'r') as fp:
-      lines=list(csv.reader(fp))
-      header = lines[0]
-      extra_names = ['a','b','c']
-      tbl = pd.read_csv(fn,skiprows=1,names=header+extra_names)
-      tbl = tbl.drop(columns=extra_names)
-      return tbl
-
 def cache_filename(fn,data_cache):
     return os.path.abspath(os.path.join(data_cache,fn.replace('\\\\','_').replace(':','_')))
 
@@ -172,11 +161,7 @@ def read_xml(fn,data_cache):
 
 def read_csv(fn,data_cache):
     cache_fn = ensure_cache(fn,data_cache)
-
-    try:
-        return pd.read_csv(cache_fn)
-    except pd.errors.ParserError:
-        return read_ragged_csv(cache_fn)
+    return read_source_csv(cache_fn)
 
 def find_all_runs(source_data_directories:list)->list:
     all_runs = []
