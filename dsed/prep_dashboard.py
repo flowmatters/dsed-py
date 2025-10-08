@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 PARAM_FN='ParameterTable.csv'
 RAW_FN='RawResults.csv'
 CLIMATE_FN='climateTable.csv'
+CONTRIBUTOR_FN='RegContributorDataGrid.csv'
 RESULTS_VALUE_COLUMN='Total_Load_in_Kg'
 RUN_METADATA_FN='DSScenarioRunInfo.xml'
 NEST_DASK_JOBS=False
@@ -42,14 +43,15 @@ TABLES={
     'parameters':['CONSTITUENT','PARAMETER'],
     'raw':['Constituent','Process','BudgetElement','Stage'],
     'areas':[],
-    'run_metadata':[]
+    'run_metadata':[],
+    'contributor':None
 }
 
 def add_per_year(df,row):
     df['kg_per_year'] = df[RESULTS_VALUE_COLUMN]/row['years']
     return df
 
-def compute_generated_loads(raw,params):
+def compute_generated_loads(raw,params,rsdr):
     logger.info('Back-calculating generated loads')
     raw['Stage'] = 'Delivered'
     unrelated = raw[raw.Constituent.isin(['Flow'])]
@@ -57,7 +59,22 @@ def compute_generated_loads(raw,params):
     generated = loads.copy()
     generated['Stage'] = 'Generated'
     generated = generated.groupby('MODEL').apply(lambda x: back_calculate.backcalc_loads(x,params))
-    return pd.concat([loads,unrelated,generated])
+
+    if len(rsdr):
+        exported = loads.copy()
+        columns = list(exported.columns)
+        exported['Stage'] = 'Exported'
+        exported = pd.merge(exported,rsdr,
+                            left_on=['REGION','SCENARIO','CATCHMENT','ELEMENT','Constituent','BudgetElement'],
+                            right_on=['REGION','SCENARIO','CATCHMENT','ELEMENT','Constituent','Process'],
+                            how='left',
+                            suffixes=('','_r'))
+        for col in back_calculate.LOAD_COLUMNS:
+            exported[col] = exported[col]*exported['RSDR']
+        exported = exported[columns]
+    else:
+        exported = pd.DataFrame(columns=loads.columns)
+    return pd.concat([loads,unrelated,generated,exported])
 
 TRANSFORMS={
     'raw':add_per_year,
@@ -99,6 +116,7 @@ def map_run(param_fn:str,base_dir:str)->dict:
                   parameters=param_fn,
                   raw=param_fn.replace(PARAM_FN,RAW_FN),
                   areas=param_fn.replace(PARAM_FN,AREAS_FN),
+                  contributor=param_fn.replace(PARAM_FN,CONTRIBUTOR_FN),
                   years=determine_num_years(os.path.dirname(param_fn)),
                   run_metadata=os.path.join(os.path.dirname(param_fn),RUN_METADATA_FN))
     logger.info('Detected run %s:%s (%d years)',result['model'],result['scenario'],result['years'])
@@ -195,6 +213,10 @@ def load_tables(runs,data_cache,reporting_regions=None):
         for mod in runs:
             logger.info(f'Loading %s for %s from %s',table,run_label(mod),mod[table])
             fn = mod[table]
+            if not os.path.exists(fn):
+                logger.warning('File %s does not exist, skipping',fn)
+                continue
+
             if fn.endswith('.xml'):
                 tbl = read_xml(fn,data_cache)
             else:
@@ -205,6 +227,10 @@ def load_tables(runs,data_cache,reporting_regions=None):
                 tbl = TRANSFORMS[table](tbl,mod)
 
             loaded.append(tbl)
+        if not len(loaded):
+            logger.warning('No data loaded for table %s',table)
+            res[table] = pd.DataFrame()
+            continue
         combined = pd.concat(loaded).reset_index().drop(columns='index')
         if 'CATCHMENT' in combined.columns and reporting_regions is not None:
             logger.debug(reporting_regions.head())
@@ -438,12 +464,13 @@ def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None
 
     storage_results = process_storage_trapping(raw,storage_list)
 
+    rsdr = all_tables['contributor']
     raw = pd.concat([fu_results,link_results,other_results,storage_results])
     raw = add_key(raw)
     raw = raw.dropna(subset=[RESULTS_VALUE_COLUMN])
     raw = drop_zero_results(raw,BUDGET_ELEMENTS_WHERE_ZERO_IS_NA)
     raw = classify_results(raw,parameters,model_parameter_index,nest_dask_jobs)
-    raw = compute_generated_loads(raw,parameters)
+    raw = compute_generated_loads(raw,parameters,rsdr)
     raw = raw.reset_index(drop=True)
 
     all_tables['raw'] = raw
@@ -631,10 +658,11 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
                                     dashboard_data_dir=dashboard_data_dir
                                     ))
 
+    f_rsdr=None
     if network_data_dir and reporting_regions:
         logger.info('Processing RSDRs')
-        f = build_rsdr_dataset(dashboard_data_dir,runs,network_data_dir,reporting_regions,rsdr_reporting=rsdr_reporting,client=client)
-        futures.append(f)
+        f_rsdr = build_rsdr_dataset(dashboard_data_dir,runs,network_data_dir,reporting_regions,rsdr_reporting=rsdr_reporting,client=client)
+        futures.append(f_rsdr)
 
     main_jobs = []
     for run in runs:
@@ -658,6 +686,8 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
         model_element_index = parameters[['MODEL','ELEMENT','SCENARIO']].drop_duplicates()
 
         for tbl,grouping_keys in TABLES.items():
+            if grouping_keys is None:
+                continue
             logger.info(f'Creating dataset for {tbl}')
             ds = open_hg(tbl)
             ds.rewrite(False)
