@@ -382,7 +382,7 @@ def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None
     parameters.loc[parameters.CONSTITUENT.isna(),'CONSTITUENT']='Flow'
     parameters_without_model = parameters.drop(columns='MODEL')
     parameters_without_model = add_key(parameters_without_model)
-    parameters_without_model = parameters_without_model.dropna()
+    parameters_without_model = parameters_without_model.dropna(subset=['VALUE'])
     all_tables['parameters'] = parameters_without_model
     all_tables['parameters_orig'] = parameters
 
