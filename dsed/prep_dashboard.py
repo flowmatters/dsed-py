@@ -717,7 +717,8 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
                 for v in values:
                     model_parameter_index[v] = False
                     model_parameter_index.loc[model_parameter_index[marker]==v,v] = True
-            model_parameter_index['DEFAULT WET'].fillna(model_parameter_index['DEFAULT'],inplace=True)
+            if 'DEFAULT WET' in model_parameter_index.columns:
+                model_parameter_index['DEFAULT WET'].fillna(model_parameter_index['DEFAULT'],inplace=True)
         ds.add_table(model_parameter_index,role='model-parameter')
 
         return None
