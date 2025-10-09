@@ -139,7 +139,7 @@ class MassBalanceBuilder(object):
         #massBalanceAnnual_transposed2
 
         #Swap the order of the rows
-        processOrder = ["Supply", "Loss", "Other", "Residual", "Total"]
+        processOrder = ["Supply", "Other", "Loss", "Residual", "Total"]
         processIndex = sorted(massBalanceAnnual_transposed2.index, key=lambda x: processOrder.index(x[0]))
         mba_reordered = massBalanceAnnual_transposed2.reindex(processIndex)
         budElmntOrder = [
