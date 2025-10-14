@@ -40,8 +40,8 @@ SEDIMENT_BULK_DENSITY = 1.5 # g/cm^3
 AREAS_FN='fuAreasTable.csv'
 
 TABLES={
-    'parameters':['CONSTITUENT','PARAMETER'],
-    'raw':['Constituent','Process','BudgetElement','Stage'],
+    'parameters':['CONSTITUENT','PARAMETER','SCENARIO'], # 'SCENARIO',
+    'raw':['Constituent','Process','BudgetElement','Stage','SCENARIO'], # 'SCENARIO',
     'areas':[],
     'run_metadata':[],
     'contributor':None
