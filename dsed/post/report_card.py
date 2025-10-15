@@ -2800,6 +2800,7 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
     process_export_aggregated = concat_data_frames_at_level(process_based_export,4)
     load_all_tables(overview_ds,process_export_aggregated,['units','fu','region','scenario','constituent'],aggregation='process')
     process_export_by_region = sum_data_frames_at_level(process_export_aggregated,2,1)
+    process_export_by_region['%'] = to_percentage_of_whole(process_export_by_region['kg/yr'])
     load_all_tables(overview_ds,process_export_by_region,['units','fu','scenario','constituent'],aggregation='process',region=OVERALL_REGION)
 
     BasinLoadToStream_FU = land_use_supply_by_basin(constituents,REGCONTRIBUTIONDATAGRIDS,fus_of_interest)
