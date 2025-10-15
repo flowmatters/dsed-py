@@ -149,16 +149,19 @@ def scale_all_dfs(dfs,scale):
         return df * scale
     return process_all_dfs(dfs,process)
 
-def concat_data_frames_at_level(dfs,level):
+def concat_data_frames_at_level(dfs,level,drop=True):
     if level > 0:
-        return {k: concat_data_frames_at_level(v,level-1) for k,v in dfs.items()}
+        return {k: concat_data_frames_at_level(v,level-1,drop) for k,v in dfs.items()}
     
     entries = list(dfs.items())
     if not len(entries):
         return pd.DataFrame()
 
     if isinstance(entries[0][1],pd.DataFrame):
-        return pd.concat([v for k,v in entries],axis=1,keys=[k for k,v in entries]).T.droplevel(1).T
+        result = pd.concat([v for k,v in entries],axis=1,keys=[k for k,v in entries])
+        if drop:
+            result = result.T.droplevel(1).T
+        return result
     
     inverted = {}
     for k0,v0 in entries:
@@ -166,7 +169,36 @@ def concat_data_frames_at_level(dfs,level):
             if k1 not in inverted:
                 inverted[k1] = {}
             inverted[k1][k0] = v1
-    return concat_data_frames_at_level(inverted,level+1)
+    return concat_data_frames_at_level(inverted,level+1,drop)
+
+def sum_data_frames_at_level(dfs,level,sum_axis):
+    if level > 0:
+        return {k: sum_data_frames_at_level(v,level-1,sum_axis) for k,v in dfs.items()}
+
+    entries = list(dfs.items())
+    if not len(entries):
+        return pd.DataFrame()
+
+    # if isinstance(entries[0][1],pd.DataFrame):
+    if any(isinstance(entry[1],pd.DataFrame) and (len(entry[1])>0) for entry in entries):
+        dfs = [v for _,v in entries]
+        if not all(isinstance(v,pd.DataFrame) for v in dfs):
+            logger.warning('Not all entries at level %d are DataFrames: %s',level,[(k,type(v)) for k,v in entries])
+            non_dfs = [(k,v) for k,v in entries if not isinstance(v,pd.DataFrame)]
+            for k,v in non_dfs:
+                logger.warning('Non-DataFrame entry: %s %s',k,str(v))
+            raise ValueError('Inconsistent types at level %d'%level)
+        sums = [v.sum(axis=sum_axis) for v in dfs]
+        result = pd.concat(sums,axis=1,keys=[k for k,v in entries])#.T.droplevel(1).T
+        return result
+
+    inverted = {}
+    for k0,v0 in entries:
+        for k1,v1 in v0.items():
+            if k1 not in inverted:
+                inverted[k1] = {}
+            inverted[k1][k0] = v1
+    return sum_data_frames_at_level(inverted,level+1,sum_axis)
 
 def create_output_directories(base,regions):
     reportcardOutputsPrefix = Path(base)
@@ -382,7 +414,7 @@ def build_overall_export_tables(regions,models,region_load_to_reg_export):
         result[model] = overall_sum_FU
     return result
 
-def process_based_basin_export_tables(constituents,regional_contributor):
+def process_based_basin_export_tables(constituents,regional_contributor,**filters):
     result = {}
 
     for region, region_data in regional_contributor.items():
@@ -397,6 +429,8 @@ def process_based_basin_export_tables(constituents,regional_contributor):
             if data is None:
                 logger.info('No regional contributor for %s %s',region,model)
                 continue
+            for k,v in filters.items():
+                data = data[data[k]==v]
             # data_summary_Process = data.reset_index().groupby(['Rep_Region','Constituent','Process']).sum()
             data_summary_Process = data.reset_index().groupby(['MU_48','Constituent','Process']).sum()
             basins = data_summary_Process.index.levels[0]
@@ -411,7 +445,7 @@ def process_based_basin_export_tables(constituents,regional_contributor):
 
                 for con in constituents:
                     progress ('      ',con)
-                    constituent_data = pd.DataFrame(data_summary3_Process.loc[con]['LoadToRegExport (kg)']).T
+                    constituent_data = pd.DataFrame(data_summary3_Process.loc[con]['LoadToRegExport (kg)'].astype('f')).T
 
                     process_mapping = {}
                     if con in ['TSS','PN','PP']:
@@ -441,7 +475,10 @@ def process_based_basin_export_tables(constituents,regional_contributor):
 
                     for new_process, old_processes in process_mapping.items():
                         if not len(old_processes):
-                            constituent_data[new_process] = 0
+                            constituent_data[new_process] = 0.0
+                            continue
+                        if not any(op in constituent_data.columns for op in old_processes):
+                            constituent_data[new_process] = 0.0
                             continue
                         constituent_data[new_process] = constituent_data[old_processes].sum(axis=1)
                         if np.isnan(constituent_data[new_process].iloc[0]):
@@ -2748,15 +2785,22 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
     regions,runs,scenarios,report_card = identify_regions_and_models(source_data)
     overview_ds = hg.open_dataset(os.path.join(dest_data,'overview'),mode='w')
     REGCONTRIBUTIONDATAGRIDS = read_regional_contributor(source_data,subcatchment_lut)
-    BasinLoadToRegExport_Process = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS)
+    BasinLoadToRegExport_Process = {}
+    for fu in fus_of_interest+[None]:
+        if fu is None:
+            BasinLoadToRegExport_Process['all'] = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS)
+        else:
+            BasinLoadToRegExport_Process[fu] = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS,FU=fu)
     BasinLoadToRegExport_Process_PC = to_percentage_of_whole(BasinLoadToRegExport_Process)
     process_based_export = {
         '%': BasinLoadToRegExport_Process_PC,
         'kg/yr': scale_all_dfs(BasinLoadToRegExport_Process,per_year)
     }
     
-    process_export_aggregated = concat_data_frames_at_level(process_based_export,3)
-    load_all_tables(overview_ds,process_export_aggregated,['units','region','scenario','constituent'],aggregation='process')
+    process_export_aggregated = concat_data_frames_at_level(process_based_export,4)
+    load_all_tables(overview_ds,process_export_aggregated,['units','fu','region','scenario','constituent'],aggregation='process')
+    process_export_by_region = sum_data_frames_at_level(process_export_aggregated,2,1)
+    load_all_tables(overview_ds,process_export_by_region,['units','fu','scenario','constituent'],aggregation='process',region=OVERALL_REGION)
 
     BasinLoadToStream_FU = land_use_supply_by_basin(constituents,REGCONTRIBUTIONDATAGRIDS,fus_of_interest)
     # ### FU area estimation for all 6 REGIONs
