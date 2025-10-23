@@ -335,7 +335,9 @@ def add_columns_for_missing_fus(df):
         if fu not in df:
             df[fu] = np.nan
 
-def load_basin_export_tables(regional_contributor,constituents,fus_of_interest):
+def load_basin_export_tables(regional_contributor,constituents,fus_of_interest,filter=None):
+    if filter is None:
+        filter = {}
     result = {}
 
     for region, region_data in regional_contributor.items():
@@ -351,6 +353,8 @@ def load_basin_export_tables(regional_contributor,constituents,fus_of_interest):
                 logger.info('No regional contributor for %s %s',region,model)
                 continue
 
+            for k,v in filter.items():
+                data = data[data[k]==v]
             data_summary = data.reset_index().groupby(['MU_48','Constituent','FU']).sum(numeric_only=True)
             basins = data_summary.index.levels[0]
 
@@ -370,12 +374,18 @@ def load_basin_export_tables(regional_contributor,constituents,fus_of_interest):
                 basin_results = model_results[basin] = pd.DataFrame(basin_results).T
                 # BasinLoadToRegExport_FU[region][model][basin]['Grazing'] = BasinLoadToRegExport_FU[region][model][basin]['Grazing Forested'] + \
                 #                                                            BasinLoadToRegExport_FU[region][model][basin]['Grazing Open']
-                basin_results['Cropping'] = basin_results['Dryland Cropping'] + basin_results['Irrigated Cropping']
-                basin_results['Urban + Other'] = basin_results['Urban'] + basin_results['Other']
+                basin_results['Cropping'] = safe_sum_columns(basin_results,['Dryland Cropping','Irrigated Cropping'])
+                basin_results['Urban + Other'] = safe_sum_columns(basin_results,['Urban','Other'])
                 add_columns_for_missing_fus(basin_results)
-
-                basin_results = model_results[basin] = basin_results[fus_of_interest].T
+                available_fus = [fu for fu in fus_of_interest if fu in basin_results.columns]
+                basin_results = model_results[basin] = basin_results[available_fus].T
     return result
+
+def safe_sum_columns(df,cols):
+    cols = [col for col in cols if col in df.columns]
+    if not len(cols):
+        return pd.Series(0,index=df.index)
+    return df[cols].sum()
 
 def build_region_export_tables(basin_load_to_reg_export):
     result = {}
@@ -1538,6 +1548,9 @@ def compute_predev_vs_anthropogenic(basin_load_to_reg_export_fu, region, constit
     # progress(total)
     total.columns = ['Total']
     predev_vs_base_vs_change = pd.concat([predev_vs_base_vs_change, total.T], ignore_index=False)
+    if (anthro_vs_predev.sum().sum() == 0) and (predev_vs_base_vs_change.sum().sum() == 0):
+        return None, None
+
     return anthro_vs_predev, predev_vs_base_vs_change
 
 def compute_anthropogenic_summary(basin_load_to_reg_export_fu,constituents,years):
@@ -2743,6 +2756,7 @@ def populate_load_comparisons(source_data,loads_data_fn,constituents,dest_data):
     regions,runs,scenarios,report_card = identify_regions_and_models(source_data)
 
     compare_ds = hg.open_dataset(os.path.join(dest_data,'load-comparisons'),mode='w')
+    compare_ds.rewrite(False)
     loads = load_observed_loads(loads_data_fn)
     measured_annual_regions = collate_measured_annual_regions(loads)
     site_list = build_site_list(loads)
@@ -2778,12 +2792,13 @@ def populate_load_comparisons(source_data,loads_data_fn,constituents,dest_data):
     # Site list
     site_list_db = site_list.rename(columns=lambda c:c.replace(' ','_').lower())
     compare_ds.add_table(site_list_db,contextual='site-list')
-
+    compare_ds.rewrite(True)
 
 def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_interest,num_years,dest_data):
     per_year = 1/num_years
     regions,runs,scenarios,report_card = identify_regions_and_models(source_data)
     overview_ds = hg.open_dataset(os.path.join(dest_data,'overview'),mode='w')
+    overview_ds.rewrite(False)
     REGCONTRIBUTIONDATAGRIDS = read_regional_contributor(source_data,subcatchment_lut)
     BasinLoadToRegExport_Process = {}
     for fu in fus_of_interest+[None]:
@@ -2847,7 +2862,14 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
 
     load_all_tables(overview_ds,landuse_loads,['load_type','scenario','units','region'],aggregation='landuse')
 
+    for process in ['All','Gully', 'Streambank', 'Hillslope surface soil', 'Hillslope subsurface soil', 'Hillslope no source distinction', 'Undefined',
+                    'Channel Remobilisation', 'Diffuse Dissolved']:
+        filter = {}
+        if process != 'All':
+            filter['Process'] = process
+        BasinLoadToRegExport_FU = load_basin_export_tables(REGCONTRIBUTIONDATAGRIDS,constituents,fus_of_interest,filter=filter)
 
-    antrhopogenic_exports = compute_anthropogenic_summary(BasinLoadToRegExport_FU,constituents,num_years)
-    load_all_tables(overview_ds,antrhopogenic_exports,['constituent','region','summary'],aggregation='anthropogenic')
+        antrhopogenic_exports = compute_anthropogenic_summary(BasinLoadToRegExport_FU,constituents,num_years)
+        load_all_tables(overview_ds,antrhopogenic_exports,['constituent','region','summary'],aggregation='anthropogenic',process=process)
+    overview_ds.rewrite(True)
 
