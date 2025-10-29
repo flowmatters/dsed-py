@@ -3,6 +3,13 @@ import numpy as np
 import pandas as pd
 logger = logging.getLogger(__name__)
 
+RR='Retreat Rate'
+BE='Bank Erodibility'
+MABE='Mean Annual Bank Erosion'
+MCF='Mass Conversion Factor'
+MRR='Modelled Retreat Rate'
+
+ADDED_PARAMETERS = [RR,BE,MABE,MRR,MCF]
 
 def compute_streambank_parameters(params,*args):
     logger.info('Computing derived parameters (Retreat Rate)')
@@ -10,8 +17,6 @@ def compute_streambank_parameters(params,*args):
     BEC='Bank Erosion Coefficent'
     SLOPE='Link Slope'
     BFD='Bank Full Flow'
-    RR='Retreat Rate'
-    MRR='Modelled Retreat Rate'
     SBD='Sediment Bulk Density'
     BH='Bank Height'
     LL='Link Length'
@@ -21,9 +26,6 @@ def compute_streambank_parameters(params,*args):
 
     streambank_params = params[(params.ELEMENT!='Node')&params.PARAMETER.isin([BEMF,BEC,SLOPE,BFD,SBD,BH,LL,SE,RVP,MRVE])]
 
-    MABE='Mean Annual Bank Erosion'
-    MCF='Mass Conversion Factor'
-    BE='Bank Erodibility'
     index_cols = set(streambank_params.columns)-{'PARAMETER','VALUE'}
     streambank_params = streambank_params.pivot(index=index_cols,columns='PARAMETER',values='VALUE')
     streambank_params = streambank_params.astype('f')
