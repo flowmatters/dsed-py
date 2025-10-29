@@ -2959,9 +2959,17 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
         filter = {}
         if process != 'All':
             filter['Process'] = process
-        BasinLoadToRegExport_FU = load_basin_export_tables(REGCONTRIBUTIONDATAGRIDS,constituents,fus_of_interest,filter=filter)
 
-        antrhopogenic_exports = compute_anthropogenic_summary(BasinLoadToRegExport_FU,constituents,num_years)
-        load_all_tables(overview_ds,antrhopogenic_exports,['constituent','region','summary'],aggregation='anthropogenic',process=process)
+        for fu in ['All'] + fus_of_interest:
+            if fu != 'All':
+                filter['FU'] = fu
+            BasinLoadToRegExport_FU = load_basin_export_tables(REGCONTRIBUTIONDATAGRIDS,constituents,fus_of_interest,filter=filter)
+
+            antrhopogenic_exports = compute_anthropogenic_summary(BasinLoadToRegExport_FU,constituents,num_years)
+            load_all_tables(overview_ds,antrhopogenic_exports,['constituent','region','summary'],aggregation='anthropogenic',process=process,fu=fu)
+
+    overall_change = compute_overall_change(REGCONTRIBUTIONDATAGRIDS,num_years)
+    overview_ds.add_table(overall_change,aggregation='overall-change')
+
     overview_ds.rewrite(True)
 
