@@ -1077,7 +1077,7 @@ def plot_process_contributions(output_path,regions,contituents,basin_export_by_p
             if show_plot:
                 plt.show()
             if save_plot:
-                save_figure(os.path.join(output_path, region, 'processBasedExports', plot_prefix+'_' + con + '.png'))   
+                save_figure(os.path.join(output_path, region, 'processBasedExports', plot_prefix+'_' + con + '.png'))
                 if csv_prefix is not None and csv_data is not None:
                     csv_data.to_csv(os.path.join(output_path, region, 'variousTables', csv_prefix + '_' + con + '.csv'))
 
@@ -1190,7 +1190,7 @@ def plot_process_contributions(output_path,regions,contituents,basin_export_by_p
         if len(missing_regions):
             logger.warning('No data for %s. Cannot produce overall chart',', '.join(missing_regions))
             continue
-            
+
         basins_list.columns = [f'{OVERALL_REGION} Management Units']
         basins_list[f'{OVERALL_REGION} Management Units'] = basins_list[f'{OVERALL_REGION} Management Units'].replace(basin_renames)
 
@@ -1651,7 +1651,7 @@ def plot_predev_vs_anthropogenic(
             save_figure(os.path.join(output_path, region, "predevAnthropogenicExports", f"predevAnthropogenicExports_{con}.png"))
             anthros_vs_predevs = pd.concat([anthros_vs_predevs, contributions])
             predev_vs_base_vs_change_summary = pd.concat([predev_vs_base_vs_change_summary, totals])
-        
+
         if len(missing_regions):
             logger.warning('No data for %s. Cannot produce overall chart', ', '.join(missing_regions))
             continue
@@ -1677,7 +1677,7 @@ def plot_predev_vs_anthropogenic(
 
         axx = anthros_vs_predevs.plot(kind='barh',fontsize = 10, stacked=True,color=['dodgerblue','darkorange'],edgecolor='black')
 
-        if con == 'Flow':            
+        if con == 'Flow':
             axx.set_xlabel(con + ' (GL/yr OR ML/yr ???)',size=12)
         elif con == 'TSS':
             axx.set_xlabel(con + ' Load (kt/yr)',size=12)
@@ -1685,9 +1685,9 @@ def plot_predev_vs_anthropogenic(
             axx.set_xlabel(con + ' Load (t/yr)',size=12)
         else:
             axx.set_xlabel(con + ' Load (kg/yr)',size=12)
-            
+
         axx.set_ylabel('', size=14)
-                    
+
         axx.get_xaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
 
         axx.text(axx.get_xlim()[1]*0.67, 46.5,  region_labels[0], size=12)
@@ -1702,7 +1702,7 @@ def plot_predev_vs_anthropogenic(
         axx.axhline(y=23, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
         axx.axhline(y=18, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
         axx.axhline(y=5, xmin=-1, xmax=100000, color='black', linestyle='--', lw=1)
-            
+
         fig = plt.gcf()
         fig.subplots_adjust(bottom=0.1,left=0.06,top=2.945,right=0.99)
         #axx = fig.add_subplot(1,1,1)
@@ -1738,7 +1738,7 @@ def summarise_annual_observations(site_list,modelled_annual_by_region,measured_a
         for site, modelled_site_name in zip(measuredSites, modelled_sites):
             progress (site)
             if modelled_site_name is None:
-                logger.warning('No model node name corresponding to site %s in region %s', site, region) 
+                logger.warning('No model node name corresponding to site %s in region %s', site, region)
                 continue
                 # raise ValueError('Site is None')
             site_modelled = region_modelled[site]
@@ -2895,7 +2895,7 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
     BasinLoadToRegExport_Process = {}
     for fu in fus_of_interest+[None]:
         if fu is None:
-            BasinLoadToRegExport_Process['all'] = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS)
+            BasinLoadToRegExport_Process['All'] = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS)
         else:
             BasinLoadToRegExport_Process[fu] = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS,FU=fu)
     BasinLoadToRegExport_Process_PC = to_percentage_of_whole(BasinLoadToRegExport_Process)
@@ -2903,7 +2903,7 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
         '%': BasinLoadToRegExport_Process_PC,
         'kg/yr': scale_all_dfs(BasinLoadToRegExport_Process,per_year)
     }
-    
+
     process_export_aggregated = concat_data_frames_at_level(process_based_export,4)
     load_all_tables(overview_ds,process_export_aggregated,['units','fu','region','scenario','constituent'],aggregation='process')
     process_export_by_region = sum_data_frames_at_level(process_export_aggregated,2,1)
@@ -2946,7 +2946,7 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
         landuse_based_export[model]['kg/yr'] = data
         landuse_based_export[model]['kg/ha/yr'] = process_two_sets_of_dfs(data,RegionFU_Area_ha,per_area)
         landuse_based_export[model]['%'] = to_percentage_of_whole(data)\
-        
+
     landuse_loads = {
         'supply': landuse_based_supply,
         'export': landuse_based_export

@@ -560,7 +560,7 @@ def prep_massbalance(run,reporting_areas,data_cache,dataset_path,network_data_di
                 logger.warning('Multiple catchments found for node %s in %s, using first (%s)',node_name,run['model'],catchments[0]['properties']['name'])
             catchment = catchments[0]['properties']['name']
             raw.loc[(raw['FEATURE_TYPE']=='Node')&(raw['CATCHMENT']==node_name),'CATCHMENT'] = catchment
-    
+
     mb_calc = MassBalanceBuilder(None,None)
     for level in reporting_levels:
         values = reporting_areas[level].dropna().unique()
