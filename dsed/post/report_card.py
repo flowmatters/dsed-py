@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from . import moriasi
 from ..util import read_source_csv
+from .. import const as c
 import spotpy
 import matplotlib
 import dsed.const as c
@@ -117,17 +118,37 @@ def load_model_results(main_path,region,model,result):
     result = read_csv(fn,header=0)
     return result
 
-def process_all_dfs(dfs,process):
+def process_all_dfs(dfs,process,tags=False):
     '''
     Run the same process (callable) on all DataFrames referenced from a set of nested
     dictionaries.
     '''
     result = {}
     for k,v in dfs.items():
+
+        new_tags = False
+        if tags==True:
+            new_tags = [k]
+        elif tags!=False:
+            new_tags = tags + [k]
+
         if isinstance(v,dict):
-            result[k] = process_all_dfs(v,process)
+            try:
+                result[k] = process_all_dfs(v,process,tags=new_tags)
+            except:
+                logger.error(f"Error processing collection {k}")
+                raise
         else:
-            result[k] = process(v)
+            try:
+                if new_tags!=False:
+                    print("Processing ",k,new_tags)
+                    result[k] = process(v,*new_tags)
+                else:
+                    result[k] = process(v)
+            except Exception as e:
+                logger.error(f"Error processing {k}: {e}")
+                logger.info(v)
+                raise
     return result
 
 def to_percentage_of_whole(dfs,axis=0):
@@ -138,7 +159,8 @@ def to_percentage_of_whole(dfs,axis=0):
     def process(df):
         if isinstance(df,float):
             return df
-        return df.div(df.sum(axis=axis), axis='index' if axis==1 else 'columns') * 100
+        sum = df.sum(axis=axis)
+        return df.div(sum, axis='index' if axis==1 else 'columns') * 100
     return process_all_dfs(dfs,process)
 
 def scale_all_dfs(dfs,scale):
@@ -152,7 +174,7 @@ def scale_all_dfs(dfs,scale):
 def concat_data_frames_at_level(dfs,level,drop=True):
     if level > 0:
         return {k: concat_data_frames_at_level(v,level-1,drop) for k,v in dfs.items()}
-    
+
     entries = list(dfs.items())
     if not len(entries):
         return pd.DataFrame()
@@ -162,7 +184,7 @@ def concat_data_frames_at_level(dfs,level,drop=True):
         if drop:
             result = result.T.droplevel(1).T
         return result
-    
+
     inverted = {}
     for k0,v0 in entries:
         for k1,v1 in v0.items():
@@ -170,6 +192,18 @@ def concat_data_frames_at_level(dfs,level,drop=True):
                 inverted[k1] = {}
             inverted[k1][k0] = v1
     return concat_data_frames_at_level(inverted,level+1,drop)
+
+def concat_all_dataframes(dfs):
+    df_list = []
+    for k,v in dfs.items():
+        if v is None:
+            continue
+        if isinstance(v,dict):
+            v = concat_all_dataframes(v)
+        df_list.append(v)
+    if len(df_list)==0:
+        return None
+    return pd.concat(df_list,ignore_index=True)
 
 def sum_data_frames_at_level(dfs,level,sum_axis):
     if level > 0:
@@ -2793,6 +2827,64 @@ def populate_load_comparisons(source_data,loads_data_fn,constituents,dest_data):
     site_list_db = site_list.rename(columns=lambda c:c.replace(' ','_').lower())
     compare_ds.add_table(site_list_db,contextual='site-list')
     compare_ds.rewrite(True)
+
+def compute_overall_change(contributor,num_years):
+    def loads_by_rep_region(df,region,scenario):
+        if df is None:
+            return None
+        df = df.groupby(['Rep_Region','Constituent']).agg(Tot_Export_Kg=('LoadToRegExport (kg)', 'sum')).reset_index()
+        df['Region'] = region
+        df['Scenario'] = scenario
+        total = df.groupby(['Constituent']).agg(Tot_Export_Kg=('Tot_Export_Kg', 'sum')).reset_index()
+        total['Rep_Region'] = 'Total'
+        total['Region'] = region
+        total['Scenario'] = scenario
+        df = pd.concat([df,total],ignore_index=True)
+        return df
+
+    region_totals = process_all_dfs(contributor,loads_by_rep_region,tags=True)
+    region_totals = concat_all_dataframes(region_totals)
+    overall_totals = region_totals[region_totals['Rep_Region']=='Total']
+    overall = overall_totals.groupby(['Constituent','Scenario']).agg(Tot_Export_Kg=('Tot_Export_Kg','sum')).reset_index()
+    overall['Region'] = OVERALL_REGION
+    overall['Rep_Region'] = 'Total'
+    region_totals = pd.concat([region_totals,overall],ignore_index=True)
+
+    def scaling_factor(constituent):
+        if constituent=='TSS':
+            return c.KG_TO_KTONS
+        elif constituent == 'Flow':
+            return c.L_TO_ML
+        return c.KG_TO_TONS
+
+    region_table = region_totals.pivot(index=['Region','Rep_Region'],columns=['Constituent','Scenario',],values='Tot_Export_Kg')#.reset_index()
+    columns = [('Flow','BASE')] #['Region', 'Rep_Region']
+    region_table[('Flow','BASE')] *= scaling_factor('Flow') / num_years
+    for constituent in ['TSS','PP', 'DIP', 'DOP', 'PN', 'DIN', 'DON']:
+        con_columns = [col for col in region_table.columns if col[0]==constituent]
+        region_table[con_columns] *= scaling_factor(constituent) / num_years
+        region_table[(constituent,'Anthropogenic BL')] = region_table[(constituent,'BASE')] - region_table[(constituent,'PREDEV')]
+
+        if (constituent,'CHANGE') not in region_table.columns:
+            region_table[(constituent,'CHANGE')] = np.nan
+        region_table[(constituent,'Total Change')] = region_table[(constituent,'CHANGE')] - region_table[(constituent,'BASE')]
+        region_table[(constituent,'Total Change (%)')] = region_table[(constituent,'Total Change')] / region_table[(constituent,'BASE')] * 100.0
+
+        columns += [(constituent,'PREDEV'), (constituent,'BASE'), (constituent,'CHANGE'),
+                    (constituent,'Anthropogenic BL'), (constituent,'Total Change'), (constituent,'Total Change (%)')]
+    region_table = region_table.loc[:,columns]
+    def idx_key(arr):
+
+        if len(arr[0])==2 or arr[0]==OVERALL_REGION:
+            vals = sorted(set(arr))
+            res = [999 if val==OVERALL_REGION else vals.index(val) for  val in arr]
+        else:
+            res = [999 +ix if val=='Total' else ix for ix, val in enumerate(arr)]
+        return res
+    # overall_change.swaplevel().sort_index(key=test_key,level=[1,0]).swaplevel()
+    region_table = region_table.sort_index(key=idx_key,level=[0,1])
+
+    return region_table
 
 def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_interest,num_years,dest_data):
     per_year = 1/num_years
