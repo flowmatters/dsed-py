@@ -2858,9 +2858,19 @@ def compute_overall_change(contributor,num_years):
         return c.KG_TO_TONS
 
     region_table = region_totals.pivot(index=['Region','Rep_Region'],columns=['Constituent','Scenario',],values='Tot_Export_Kg')#.reset_index()
-    columns = [('Flow','BASE')] #['Region', 'Rep_Region']
-    region_table[('Flow','BASE')] *= scaling_factor('Flow') / num_years
-    for constituent in ['TSS','PP', 'DIP', 'DOP', 'PN', 'DIN', 'DON']:
+
+    scenarios = ['PREDEV','BASE','CHANGE']
+    constituents = ['TSS','PP', 'DIP', 'DOP', 'PN', 'DIN', 'DON']
+
+    # columns = [('Flow',s) for s in scenarios] #['Region', 'Rep_Region']
+    columns = [('Flow','BASE')]
+    for s in scenarios:
+        col = ('Flow',s)
+        if col not in region_table.columns:
+            region_table[col] = np.nan
+            continue
+        region_table[col] *= scaling_factor('Flow') / num_years
+    for constituent in constituents:
         con_columns = [col for col in region_table.columns if col[0]==constituent]
         region_table[con_columns] *= scaling_factor(constituent) / num_years
         region_table[(constituent,'Anthropogenic BL')] = region_table[(constituent,'BASE')] - region_table[(constituent,'PREDEV')]
@@ -2872,6 +2882,14 @@ def compute_overall_change(contributor,num_years):
 
         columns += [(constituent,'PREDEV'), (constituent,'BASE'), (constituent,'CHANGE'),
                     (constituent,'Anthropogenic BL'), (constituent,'Total Change'), (constituent,'Total Change (%)')]
+
+    amc_table = []
+    for scenario in scenarios:
+        for constituent in constituents:
+            amc = region_table[(constituent,scenario)] / region_table[('Flow',scenario)]
+            amc_table.append(amc)
+    amc_table = pd.concat(amc_table,axis=1)
+
     region_table = region_table.loc[:,columns]
     def idx_key(arr):
 
@@ -2884,7 +2902,7 @@ def compute_overall_change(contributor,num_years):
     # overall_change.swaplevel().sort_index(key=test_key,level=[1,0]).swaplevel()
     region_table = region_table.sort_index(key=idx_key,level=[0,1])
 
-    return region_table
+    return region_table, amc_table
 
 def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_interest,num_years,dest_data):
     per_year = 1/num_years
@@ -2968,8 +2986,9 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
             antrhopogenic_exports = compute_anthropogenic_summary(BasinLoadToRegExport_FU,constituents,num_years)
             load_all_tables(overview_ds,antrhopogenic_exports,['constituent','region','summary'],aggregation='anthropogenic',process=process,fu=fu)
 
-    overall_change = compute_overall_change(REGCONTRIBUTIONDATAGRIDS,num_years)
+    overall_change, average_mean_concentration = compute_overall_change(REGCONTRIBUTIONDATAGRIDS,num_years)
     overview_ds.add_table(overall_change,aggregation='overall-change')
+    overview_ds.add_table(average_mean_concentration,aggregation='average-mean-concentration')
 
     overview_ds.rewrite(True)
 
