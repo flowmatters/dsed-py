@@ -2883,12 +2883,17 @@ def compute_overall_change(contributor,num_years):
         columns += [(constituent,'PREDEV'), (constituent,'BASE'), (constituent,'CHANGE'),
                     (constituent,'Anthropogenic BL'), (constituent,'Total Change'), (constituent,'Total Change (%)')]
 
-    amc_table = []
+    amc_table_cols = []
     for scenario in scenarios:
         for constituent in constituents:
-            amc = region_table[(constituent,scenario)] / region_table[('Flow',scenario)]
-            amc_table.append(amc)
-    amc_table = pd.concat(amc_table,axis=1)
+            conversion = 1.0
+            if constituent=='TSS':
+                conversion = c.KTONS_TO_TONS
+            conversion *= c.TONS_TO_MG / c.ML_TO_L
+            amc = conversion * region_table[(constituent,scenario)] / region_table[('Flow',scenario)]
+            amc.name = (constituent,scenario,'AMC (mg/L)')
+            amc_table_cols.append(amc)
+    amc_table = pd.concat(amc_table_cols,axis=1)
 
     region_table = region_table.loc[:,columns]
     def idx_key(arr):
