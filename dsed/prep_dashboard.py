@@ -420,7 +420,7 @@ def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None
     parameters = pd.concat([fu_params,other_params])
 
     parameters = parameters[~parameters.PARAMETER.isin(['USLEmodel','GULLYmodel','Hydropower','OutletManager'])]
-    parameters.loc[parameters.ELEMENT.str.startswith('link for catchment'),'ELEMENT']='Link'
+    parameters.loc[parameters.LINK==parameters.ELEMENT,'ELEMENT']='Link'
     parameters.loc[parameters.CATCHMENT==parameters.ELEMENT,'ELEMENT']='Node'
     parameters.loc[parameters.CONSTITUENT.isna(),'CONSTITUENT']='Flow'
     parameters_without_model = parameters.drop(columns='MODEL')
