@@ -2906,6 +2906,7 @@ def compute_overall_change(contributor,num_years):
         return res
     # overall_change.swaplevel().sort_index(key=test_key,level=[1,0]).swaplevel()
     region_table = region_table.sort_index(key=idx_key,level=[0,1])
+    amc_table = amc_table.sort_index(key=idx_key,level=[0,1])
 
     return region_table, amc_table
 
