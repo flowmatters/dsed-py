@@ -44,7 +44,8 @@ TABLES={
     'raw':['Constituent','Process','BudgetElement','Stage','SCENARIO'], # 'SCENARIO',
     'areas':[],
     'run_metadata':[],
-    'contributor':None
+    'contributor':None,
+    'climate':['SCENARIO','Scale']
 }
 
 def add_per_year(df,row):
@@ -78,7 +79,8 @@ def compute_generated_loads(raw,params,rsdr):
 
 TRANSFORMS={
     'raw':add_per_year,
-    'parameters':compute_streambank_parameters
+    'parameters':compute_streambank_parameters,
+    'climate': lambda df,run: df.rename(columns={'Catchment':'CATCHMENT','FU':'ELEMENT','Element':'BudgetElement'})
 }
 
 DEFAULT_REPORTING_LEVELS = ['Region','Basin_35','MU_48','WQI_Cal']
@@ -117,6 +119,7 @@ def map_run(param_fn:str,base_dir:str)->dict:
                   raw=param_fn.replace(PARAM_FN,RAW_FN),
                   areas=param_fn.replace(PARAM_FN,AREAS_FN),
                   contributor=param_fn.replace(PARAM_FN,CONTRIBUTOR_FN),
+                  climate=param_fn.replace(PARAM_FN,CLIMATE_FN),
                   years=determine_num_years(os.path.dirname(param_fn)),
                   run_metadata=os.path.join(os.path.dirname(param_fn),RUN_METADATA_FN))
     logger.info('Detected run %s:%s (%d years)',result['model'],result['scenario'],result['years'])
@@ -394,6 +397,31 @@ def subcatchment_totals(results):
     grouped['FEATURE_TYPE'] = 'Catchment'
     return grouped
 
+def compute_climate_metrics(climate,fu_areas,years):
+    climate = clear_rows_for_zero_area_fus(climate,fu_areas,['Depth_m'],keep_area=True)
+    climate['m3_per_year'] = climate['Depth_m'] * climate['AREA'] / years
+
+    def metrics(df,grouping_columns,scale_label):
+        grouped = df.groupby(grouping_columns+['BudgetElement']).agg({
+            'm3_per_year':'sum',
+            'AREA':'sum'
+        }).reset_index()
+        grouped['mm_per_year'] = M_TO_MM * grouped['m3_per_year'] / grouped['AREA']
+        grouped = grouped.dropna()
+        pivot = grouped.pivot(index=grouping_columns,columns='BudgetElement',values='mm_per_year').reset_index()
+        pivot['Baseflow Coeff'] = pivot['Baseflow']/pivot['Rainfall']
+        pivot['Runoff Coeff'] = pivot['Runoff (QuickFlow)']/pivot['Rainfall']
+        pivot['QF:SF'] = pivot['Runoff (QuickFlow)']/pivot['Baseflow']
+        pivot['Scale'] = scale_label
+        return pivot
+
+    BASE_GROUPING_COLUMNS = ['REGION','SCENARIO','Basin_35','MU_48']
+    pivot_sc_fu = metrics(climate,BASE_GROUPING_COLUMNS+['CATCHMENT','ELEMENT'],'Subcatchment')
+    pivot_region_fu = metrics(climate,BASE_GROUPING_COLUMNS+['ELEMENT'],'Region FU')
+    pivot_region = metrics(climate,BASE_GROUPING_COLUMNS,'Region')
+    combined = pd.concat([pivot_sc_fu,pivot_region_fu,pivot_region],ignore_index=True)
+    return combined
+
 def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None,reporting_levels:list=None,storage_list=None):
     if len(runs)==1:
         logger.info('Processing single run %s',run_label(runs[0]))
@@ -406,10 +434,16 @@ def process_run_data(runs,data_cache,nest_dask_jobs=False,reporting_regions=None
 
     all_tables = load_tables(runs,data_cache,reporting_regions)
 
+
     fu_areas = all_tables['areas']
     fu_areas = fu_areas.rename(columns=dict(Catchment='CATCHMENT',FU='ELEMENT',Area='AREA'))
     fu_names=set(fu_areas.ELEMENT)
     all_tables['areas'] = fu_areas
+
+    logger.info('Processing hydro-climate parameters')
+    climate = all_tables['climate']
+    climate = compute_climate_metrics(climate,fu_areas,runs[0]['years'])
+    all_tables['climate'] = climate
 
     logger.info('Processing parameters')
     parameters = all_tables['parameters']
