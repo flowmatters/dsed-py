@@ -413,6 +413,15 @@ def compute_climate_metrics(climate,fu_areas,years):
         pivot['Runoff Coeff'] = pivot['Runoff (QuickFlow)']/pivot['Rainfall']
         pivot['QF:SF'] = pivot['Runoff (QuickFlow)']/pivot['Baseflow']
         pivot['Scale'] = scale_label
+        if 'CATCHMENT' in grouping_columns:
+            pivot['rc'] = pivot['REGION'] + '-' + pivot['CATCHMENT']
+            pivot['rcf'] = pivot['REGION'] + '-' + pivot['CATCHMENT'] + '-' + pivot['ELEMENT']
+        else:
+            pivot['rc'] = pivot['REGION'] + '-' + pivot['Basin_35']
+            if 'ELEMENT' in grouping_columns:
+                pivot['rcf'] = pivot['REGION'] + '-' + pivot['Basin_35'] + '-' + pivot['ELEMENT']
+            else:
+                pivot['rcf'] = pivot['REGION'] + '-' + pivot['Basin_35']
         return pivot
 
     BASE_GROUPING_COLUMNS = ['REGION','SCENARIO','Basin_35','MU_48']
