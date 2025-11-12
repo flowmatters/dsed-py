@@ -333,7 +333,7 @@ def identify_regions_and_models(main_path):
     runs = list(runs)
     assert len(runs), f'No model runs found in {main_path}'
     scenarios = [m.split('_')[0] for m in runs]
-    report_cards = set([r.split('_')[-1] for r in runs])
+    report_cards = set(['_'.join(r.split('_')[1:]) for r in runs])
     assert len(report_cards) == 1, f"Expected exactly one report card type, found {report_cards}"
     return regions,runs,scenarios,list(report_cards)[0]
 
