@@ -744,6 +744,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
                         any_true = bool(subset[col].any())
                         tags[col.replace('is_','contains_')] = any_true
                     subset = subset.drop(columns=grouping_keys)
+                    subset = subset.dropna(axis=1,how='all') # drop columns that are all NaN
                     ds.add_table(subset,**tags)
             else:
                 ds.add_table(full_tbl,purpose=tbl)
