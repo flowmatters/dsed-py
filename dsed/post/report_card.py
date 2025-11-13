@@ -102,6 +102,8 @@ def model_results_dir(main_path,region,model_run):
     if not len(results_sets):
         return None
 
+    if 'ParameterTable.csv' in results_sets:
+        return base
     assert len(results_sets) == 1, f"Expected exactly one results set in {base}, found {results_sets}"
     return os.path.join(base,results_sets[0])
 
