@@ -51,17 +51,23 @@ progress=print
 def nop(*args, **kwargs):
     pass
 
+DATA_CACHE={}
+
 def read_csv(fn, *args, **kwargs):
-    directory = os.path.dirname(fn)
-    filename_pattern = os.path.basename(fn)
-    filename_lower = filename_pattern.lower()
-    for root, _, files in os.walk(directory):
-        for file in files:
-            if file.lower() == filename_lower:
-                file_path = os.path.join(root, file)
-                return read_source_csv(file_path, *args, **kwargs)
-    logger.warning(f"File matching '{filename_pattern}' not found in '{directory}' (case-insensitive).")
-    return None
+    if fn not in DATA_CACHE:
+        directory = os.path.dirname(fn)
+        filename_pattern = os.path.basename(fn)
+        filename_lower = filename_pattern.lower()
+        DATA_CACHE[fn] = None
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if file.lower() == filename_lower:
+                    file_path = os.path.join(root, file)
+                    DATA_CACHE[fn] = read_source_csv(file_path, *args, **kwargs)
+        if DATA_CACHE[fn] is None:
+            logger.warning(f"File matching '{filename_pattern}' not found in '{directory}' (case-insensitive).")
+
+    return DATA_CACHE[fn]
 
 def save_figure(fn):
     os.makedirs(os.path.dirname(fn),exist_ok=True)
@@ -69,10 +75,14 @@ def save_figure(fn):
     plt.clf()
 
 def load_lut(fn):
+    if isinstance(fn,pd.DataFrame):
+        return fn
     if isinstance(fn,gpd.GeoDataFrame):
         lut = fn
     else:
-        lut = gpd.read_file(fn)
+        if fn not in DATA_CACHE:
+            DATA_CACHE[fn] = gpd.read_file(fn)
+        lut = DATA_CACHE[fn]
     lut.rename(columns={'SUBCAT': 'ModelElement'}, inplace=True)
     lut = lut.drop(columns=['geometry'],errors='ignore')
     return lut
@@ -115,7 +125,7 @@ def load_model_results(main_path,region,model,result):
         path,
         result)
     if not os.path.exists(fn):
-        logger.warning('Run (%s/%s) exists but results file does not: %s',region,model,result)
+        # logger.warning('Run (%s/%s) exists but results file does not: %s',region,model,result)
         return None
     result = read_csv(fn,header=0)
     return result
@@ -143,7 +153,6 @@ def process_all_dfs(dfs,process,tags=False):
         else:
             try:
                 if new_tags!=False:
-                    print("Processing ",k,new_tags)
                     result[k] = process(v,*new_tags)
                 else:
                     result[k] = process(v)
@@ -345,14 +354,10 @@ def read_regional_contributor(main_path,sc_region_lut):
     sc_region_lut = load_lut(sc_region_lut)
 
     for region in regions:
-        progress (region)
-
         regLUT = sc_region_lut[sc_region_lut['Region'] == region]
         result[region] = {} #model: pd.DataFrame() for model in MODELs}
 
         for model_full, model in zip(runs,scenarios):
-            progress('  ',model)
-
             # region_txt = regions[regions.index(region)], # ????
             RegContributorDataGrid_fil_df = load_model_results(main_path,region,model_full,'RegContributorDataGrid.csv')
             #Join the reg Cont table and the regions df
@@ -377,12 +382,9 @@ def load_basin_export_tables(regional_contributor,constituents,fus_of_interest,f
     result = {}
 
     for region, region_data in regional_contributor.items():
-        progress(region)
-
         region_results = result[region] = {}
 
         for model, data in region_data.items():
-            progress('  ',model)
             model_results = region_results[model] = {}
 
             if data is None:
@@ -396,15 +398,11 @@ def load_basin_export_tables(regional_contributor,constituents,fus_of_interest,f
 
 
             for basin in basins:
-                progress('    ',basin)
-
                 basin_results = model_results[basin] = {}
                 data_summary2 = data_summary.loc[basin].T[constituents]
                 data_summary3 = data_summary2.T
 
                 for con in constituents:
-                    progress ('      ',con)
-
                     basin_results[con] = data_summary3.loc[con]['LoadToRegExport (kg)']
 
                 basin_results = model_results[basin] = pd.DataFrame(basin_results).T
@@ -427,14 +425,11 @@ def build_region_export_tables(basin_load_to_reg_export):
     result = {}
 
     for region, region_data in basin_load_to_reg_export.items():
-        progress(region)
-
         result[region] = {}
 
         for model, base in region_data.items():
             base = basin_load_to_reg_export[region][model]
             basins = base.keys()
-            progress('  ',model,basins)
             region_sum_fu = 0
 
             for basin in basins:
@@ -448,11 +443,9 @@ def build_overall_export_tables(regions,models,region_load_to_reg_export):
     result = {}
 
     for model in models:
-        progress(model)
         overall_sum_FU = 0
 
         for region in regions:
-            progress('  ',region)
             region_export = region_load_to_reg_export[region][model]
             if hasattr(region_export,'fillna'):
                 region_export = region_export.fillna(0)
@@ -464,12 +457,8 @@ def process_based_basin_export_tables(constituents,regional_contributor,**filter
     result = {}
 
     for region, region_data in regional_contributor.items():
-        progress(region)
-
         result[region] = {}
         for model, data in region_data.items():
-            progress('  ',model)
-
             result[region][model] = {}
 
             if data is None:
@@ -483,14 +472,11 @@ def process_based_basin_export_tables(constituents,regional_contributor,**filter
 
 
             for basin in basins:
-                progress ('    ',basin)
-
                 result[region][model][basin] = {}
                 data_summary2_Process = data_summary_Process.loc[basin].T[constituents]
                 data_summary3_Process = data_summary2_Process.T
 
                 for con in constituents:
-                    progress ('      ',con)
                     constituent_data = pd.DataFrame(data_summary3_Process.loc[con]['LoadToRegExport (kg)'].astype('f')).T
 
                     process_mapping = {}
@@ -539,13 +525,9 @@ def process_based_region_export_tables(regions,constituents,basin_export_by_proc
     result = {}
 
     for region in regions:
-        progress(region)
-
         result[region] = {}
 
         for con in constituents:
-            progress('  ',con)
-
             base = basin_export_by_process[region]['BASE']
             basins = base.keys()
 
@@ -562,11 +544,9 @@ def process_based_overall_export(regions,constituents,region_export_by_process):
     result = {}
 
     for con in constituents:
-        progress(con)
         overall_sum_process = 0
 
         for region in regions:
-            progress('  ',region)
             region_data = region_export_by_process[region][con]
             if hasattr(region_data,'fillna'):
                 region_data = region_data.fillna(0)
@@ -580,13 +560,10 @@ def load_regional_source_sink(main_path,regions,models,rc,sc_region_lut):
 
     sc_region_lut = load_lut(sc_region_lut)
     for region in regions:
-        progress (region)
-
         result[region] = {}
         # regLUT = sc_region_lut[sc_region_lut['Region'] == region]
 
         for model in models:
-            progress('  ',model)
             result[region][model] = load_model_results(main_path,region,model+'_'+rc,'RegionalSourceSinkSummaryTable.csv')
     return result
 
@@ -611,8 +588,6 @@ def region_source_sink_summary(main_path,regions,models,rc,subcatchments):
         #REGCONTRIBUTIONDATAGRIDS[region] = {model: pd.DataFrame() for model in models}
 
         for model in models:
-            progress(model)
-
             RawResult_fil_df = load_model_results(main_path,region,model + '_' + rc,'RawResults.csv')
             if RawResult_fil_df is None:
                 logger.info('No model results for %s %s',region,model)
@@ -635,13 +610,9 @@ def region_source_sink_summary(main_path,regions,models,rc,subcatchments):
 def source_sink_by_basin(regions, models, constituents,core_constituents,regional_source_sinks):
     result = {}
     for region in regions:
-        progress(region)
-
         result[region] = {}
 
         for model in models:
-            progress(' ',model)
-
             data = regional_source_sinks[region][model]
             if data is None:
                 logger.info('No regional source sink for %s %s',region,model)
@@ -759,17 +730,14 @@ def source_sink_by_region(core_constituents,basin_source_sink):
     result = {}
     regions = basin_source_sink.keys()
     for region in regions:
-        progress(region)
         result[region] = {}
         for con in core_constituents:
-            progress(' ',con)
             base = basin_source_sink[region]['BASE']
             basins = base.keys()
 
             Region_sum = 0
 
             for basin in basins:
-                progress('  ',basin)
                 Region_sum = Region_sum + basin_source_sink[region]['BASE'][basin][con].fillna(0)
                 Region_sum
 
@@ -780,11 +748,9 @@ def overall_source_sink_budget(regions,core_constituents,regional_source_sink):
     result = {}
 
     for con in core_constituents:
-        progress(con)
         overall_sum_process = 0
 
         for region in regions:
-            # progress(region)
             overall_sum_process = overall_sum_process + regional_source_sink[region][con].fillna(0)
             result[con] = overall_sum_process
 
@@ -821,7 +787,6 @@ def stream_lengths(main_path,regions,region_names,rc):
     result = []
 
     for region in regions:
-        progress(region)
         parameterTable = load_model_results(main_path,region,'BASE_'+rc,'ParameterTable.csv')
         # paramterTable_fil = modelResultsPrefix + REGIONs[REGIONs.index(region)] + '//Model_Outputs//'  + 'BASE' + '_' + RC + '//ParameterTable.csv'
         # paramterTable = read_csv(paramterTable_fil,header=0,usecols=[0,1,2,3,4,5,6])
@@ -845,12 +810,9 @@ def fu_load_summary(output_path,regions,region_names,core_constituents,region_ex
     result = {}
 
     for con in core_constituents[0:4]:
-        progress(con)
-
         con_results = pd.DataFrame([])
         valid_regions = []
         for ix,region in enumerate(regions):
-            progress(' ',region)
             region_data = region_export_by_fu[region]['BASE']
             if region_data is None or isinstance(region_data,int):
                 logger.info('No regional export by FU for %s',region)
@@ -885,8 +847,6 @@ def fu_areal_load_summary(output_path,fu_load,fu_areas):
     result = {}
 
     for constituent,df in fu_load.items():
-        progress(constituent)
-
         # FU_Load_summary_con = FU_Load_summary[constituent]
         if constituent == 'TSS':
             scale = c.KTONS_TO_TONS
@@ -999,10 +959,6 @@ def plot_sugarcane_tonnages(output_path,fu_load_summary,fu_area_summary,constitu
     PROs = ['Sugarcane']
 
     for p in PROs:
-        progress(p)
-
-        progress(constituent)
-
         plt.clf()
 
         if p == 'Sugarcane':
@@ -1070,8 +1026,6 @@ def plot_process_contributions(output_path,regions,contituents,basin_export_by_p
     #     plt.ioff()
 
     for con in contituents:
-        progress(con)
-
         basins_list = pd.DataFrame([])
         basins_process_summary = pd.DataFrame([])
 
@@ -1085,8 +1039,6 @@ def plot_process_contributions(output_path,regions,contituents,basin_export_by_p
 
         missing_regions = set()
         for region in regions:
-            progress('  ',region)
-
             base = basin_export_by_process[region]['BASE']
 
             basins = base.keys()
@@ -1100,8 +1052,6 @@ def plot_process_contributions(output_path,regions,contituents,basin_export_by_p
                 continue
 
             for basin in basins:
-                progress('    ',basin)
-
                 basin_list.append(basin)
                 basin_process_summary.append(base[basin][con]['LoadToRegExport (kg)']/years)
 
@@ -1301,8 +1251,6 @@ def plot_process_contributions(output_path,regions,contituents,basin_export_by_p
 
 def plot_land_use_exports(output_path,regions,constituents,region_export_by_fu,region_fu_area,overall_export_by_fu,years):
     for region in regions:
-        progress(region)
-
         RegionLoad = region_export_by_fu[region]
         RegionLoad = RegionLoad['BASE']
         if RegionLoad is None or isinstance(RegionLoad,int):
@@ -1315,8 +1263,6 @@ def plot_land_use_exports(output_path,regions,constituents,region_export_by_fu,r
         RegionFUArea = RegionFUArea*c.M2_TO_HA  #unit conversion
 
         for con in constituents:
-            progress(con)
-
             plt.clf()
 
             if con == 'TSS':
@@ -1365,8 +1311,6 @@ def plot_land_use_exports(output_path,regions,constituents,region_export_by_fu,r
             contribution = RegionLoad[constituents]
             contribution = contribution/contribution.sum()*100
 
-            progress(contribution)
-
             ax3 = contribution.T.plot(kind='bar',width=0.6,grid="off",color=FU_COLORS)
 
             ax3.legend(bbox_to_anchor=(1,1),fontsize=6.4,ncol=5)
@@ -1374,9 +1318,6 @@ def plot_land_use_exports(output_path,regions,constituents,region_export_by_fu,r
             ax3.set_ylabel("Percent Contribution",size=8)
             ax3.set_xticklabels(['TSS','PN','PP','DIN'],rotation='horizontal')
             ax3.set_xlabel('')
-
-
-            progress(contribution)
 
             save_figure(os.path.join(output_path,region,'landuseBasedExports','exportPercentByLanduse.png'))
 
@@ -1593,10 +1534,8 @@ def compute_anthropogenic_summary(basin_load_to_reg_export_fu,constituents,years
     regions = list(basin_load_to_reg_export_fu.keys())
     results = {}
     for con in constituents:
-        progress(con)
         results[con] = {}
         for region in regions:
-            progress('  ',region)
             contributions, totals = compute_predev_vs_anthropogenic(basin_load_to_reg_export_fu, region, con,years,'BASE')
             results[con][region] = {
                 'contributions': contributions,
@@ -1721,7 +1660,6 @@ def summarise_annual_observations(site_list,modelled_annual_by_region,measured_a
         result = {}
 
         for q in quality:
-            progress(q)
             result[q] = summarise_annual_observations(site_list,modelled_annual_by_region,measured_annual_by_region,only_good_quality=(q == 'yes'))
         return result
 
@@ -1729,7 +1667,6 @@ def summarise_annual_observations(site_list,modelled_annual_by_region,measured_a
     summaryAnnualRegions = {}
 
     for region in regions:
-        progress (region)
         measuredSites = site_list[site_list['Region']==region]['Site Code']
         modelled_sites = site_list[site_list['Region']==region]['Node']
         summaryAnnualSites = {site: pd.DataFrame() for site in measuredSites}
@@ -1738,7 +1675,6 @@ def summarise_annual_observations(site_list,modelled_annual_by_region,measured_a
         #summaryAnnualSites = {site: pd.DataFrame() for site in parasCompare_latest}
 
         for site, modelled_site_name in zip(measuredSites, modelled_sites):
-            progress (site)
             if modelled_site_name is None:
                 logger.warning('No model node name corresponding to site %s in region %s', site, region)
                 continue
@@ -1752,7 +1688,6 @@ def summarise_annual_observations(site_list,modelled_annual_by_region,measured_a
             summaryAnnualParas = {para: pd.DataFrame() for para in PARAS_COMPARE_LATEST}
 
             for para in PARAS_COMPARE_LATEST:
-                progress (para)
                 if not para in site_modelled:
                     logger.info('No modelled data for %s/%s/%s', region, site, para)
                     # continue
@@ -1809,7 +1744,6 @@ def compute_model_observed_ratios(site_list,annual_by_quality,only_good_quality=
     if only_good_quality is None:
         result = {}
         for q in ['yes','no']:
-            progress(q)
             filter_by_quality = q == 'yes'
             # filter_label = 'good quality only' if filter_by_quality else 'all data'
             result[q] = compute_model_observed_ratios(site_list, annual_by_quality,only_good_quality=filter_by_quality)
@@ -1818,7 +1752,6 @@ def compute_model_observed_ratios(site_list,annual_by_quality,only_good_quality=
     regions = get_regions(site_list)
     result = {}
     for region in regions:
-        progress(region)
         result[region] = {}
         q = 'yes' if only_good_quality else 'no'
         measuredSites = site_list[site_list['Region']==region]['Site Code']
@@ -1826,7 +1759,6 @@ def compute_model_observed_ratios(site_list,annual_by_quality,only_good_quality=
 
         for site in measuredSites:
             averageAnnualsBySites = []
-            progress(site)
             site_data = region_data[site]
             if site_data is None or not len(site_data):
                 logger.info('No data for %s/%s', region, site)
@@ -1834,8 +1766,6 @@ def compute_model_observed_ratios(site_list,annual_by_quality,only_good_quality=
                 continue
 
             for para in PARAS_COMPARE_LATEST:
-                progress(para)
-
                 # summaryAnnual_temp = annual_by_quality[q][region]
                 annuals = site_data[para]
                 nonNaNs = annuals.dropna()
@@ -1923,17 +1853,14 @@ def average_annual_comparisons(site_list,annual_by_quality):
     result = {}
     for filter_data in [True,False]:
         q = 'yes' if filter_data else 'no'
-        progress(q)
         result[q] = {}
         for region in regions:
-            progress(region)
             result[q][region] = {}
             measuredSites = site_list[site_list['Region'] == region]['Site Code'].tolist()
             region_data = annual_by_quality[q][region]
 
             for site in measuredSites:
                 averageAnnualsBySites = []
-                progress(site)
                 site_data = region_data[site]
 
                 if site_data is None or not len(site_data):
@@ -1942,9 +1869,6 @@ def average_annual_comparisons(site_list,annual_by_quality):
                     continue
 
                 for para in PARAS_COMPARE_LATEST:
-                    progress(para)
-
-
                     annuals = site_data[para]
                     nonNaNs = annuals.dropna()
                     averageAnnual = nonNaNs.mean()
@@ -2020,14 +1944,11 @@ def average_annual_comparison_at_regional_sites(site_list,annual_by_quality):
     regions = get_regions(site_list)
     result = {}
     for q in ['yes','no']:#[0:1]:
-        progress(q)
         result[q] = {}
         for para in PARAS_COMPARE_LATEST:
-            progress(para)
             result[q][para] = {}
 
             for region in regions:
-                progress(region)
                 region_data = annual_by_quality[q][region]
 
                 sitesOfInterest = pd.DataFrame(site_list[site_list['Region'] == region]['Site Code'].tolist())
@@ -2036,13 +1957,10 @@ def average_annual_comparison_at_regional_sites(site_list,annual_by_quality):
                 sitesOfInterest = sitesOfInterest['Sname'].tolist()
                 measuredSites = sitesOfInterest
 
-                progress(measuredSites)
-
                 averageAnnualsByParas = []
                 valid_sites = []
 
                 for site in measuredSites:
-                    progress(site)
                     site_data = region_data[site]
                     if site_data is None or not len(site_data):
                         logger.info('No data for %s/%s', region, site)
@@ -2181,10 +2099,7 @@ def calc_moriasi_stats(constituents,site_list,annual_by_quality):
     for q in ['yes','no']:
         result[q] = {}
 
-        progress(q)
-
         for region in regions:
-            progress(region)
             result[q][region] = {}
 
             sitesOfInterest = site_list[site_list['Region'] == region]['Site Code'].tolist()
@@ -2227,8 +2142,6 @@ def calc_moriasi_stats(constituents,site_list,annual_by_quality):
                     continue
 
             for site in sitesMoriasi:
-
-                progress(site)
                 ### 1986 to 2023
 
                 Moriasi_stat_site_86_23 =  pd.DataFrame(columns=MORIASI_COLUMNS)
@@ -2236,7 +2149,6 @@ def calc_moriasi_stats(constituents,site_list,annual_by_quality):
                 Annual_site_df = summaryAnnual_temp.loc[summaryAnnual_temp['Site'] == site]
 
                 for idx, constituent in enumerate(constituents):
-                    progress(constituent)
                     Annual_site_df_constituent = Annual_site_df.loc[(Annual_site_df['Constituent'] == constituent)]
 
                     # Remove rows with NaN in 'Modelled' and 'Monitored' columns
@@ -2309,29 +2221,23 @@ def compute_annual_comparisons_all_sites(site_list,annual_by_quality):
     result = {}
     regions = get_regions(site_list)
     for q in ['yes','no']:
-        progress(q)
         result[q] = {}
         for region in regions:
-            progress (region)
             result[q][region] = {}
             measuredSites = site_list[site_list['Region'] == region]['Site Code'].tolist()
             region_data = annual_by_quality[q][region]
             sitesAnnual = []
             for site in measuredSites:
-                # progress(site)
                 site_data = region_data[site]
                 if 'Flow' in site_data and not site_data['Flow'].empty:
                     sitesAnnual.append(site)
 
             for site in sitesAnnual:
-                progress (site)
-
                     #summaryAnnualParas = {para: pd.DataFrame() for para in parasCompare_latest}
                 result[q][region][site] = {}
 
                 for para in PARAS_COMPARE_LATEST[:-1]:  #[0:1]
-                    progress (para)
-
+                    # progress (para)
                     annuals = annual_by_quality[q][region][site][para]
                     compare = annuals.dropna().copy()
 
@@ -2395,14 +2301,10 @@ def land_use_supply_by_basin(constituents,regional_contributions,fus_of_interest
     BasinLoadToStream_FU = {}
 
     for region, region_data in regional_contributions.items():
-        progress(region)
-
         BasinLoadToStream_FU[region] = {}
 
         for model_full, data in region_data.items():
             model = model_full.split('_')[0]
-            progress(model)
-
             BasinLoadToStream_FU[region][model] = {}#{basin: pd.DataFrame() for basin in BASINs}
 
             if data is None:
@@ -2412,15 +2314,11 @@ def land_use_supply_by_basin(constituents,regional_contributions,fus_of_interest
             BASINs = data_summary.index.levels[0]
 
             for basin in BASINs:
-                progress(basin)
-
                 BasinLoadToStream_FU[region][model][basin] = {}
                 data_summary2 = data_summary.loc[basin].T[constituents]
                 data_summary3 = data_summary2.T
 
                 for con in constituents:
-                    progress (con)
-
                     #if region == 'BU' and model == 'BASE':
                     #    BasinLoadToStream_FU[region][model][basin][con] = data_summary3.loc[con]['LoadToStream']
                     #elif region == 'BU' and model == 'CHANGE':
@@ -2447,8 +2345,6 @@ def land_use_supply_by_region(basin_supply,scenario='BASE'):
     result = {}
 
     for region, base in basin_supply.items():
-        progress(region)
-
         base = basin_supply[region][scenario]
         basins = base.keys()
 
@@ -2465,7 +2361,6 @@ def land_use_supply_totals(region_supply):
     result = 0
 
     for region,data in region_supply.items():
-        progress(region)
         if hasattr(data, 'fillna'):
             data = data.fillna(0)
         result = result + data

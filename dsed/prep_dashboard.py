@@ -177,6 +177,7 @@ def ensure_cache(fn,data_cache):
         shutil.copy(fn,cache_fn)
     return cache_fn
 
+DATA_CACHE={}
 def read_xml(fn,data_cache):
     cache_fn = ensure_cache(fn,data_cache)
     # Read the xml and create a single row dataframe using the elements under the root element as columns
@@ -188,7 +189,9 @@ def read_xml(fn,data_cache):
 
 def read_csv(fn,data_cache):
     cache_fn = ensure_cache(fn,data_cache)
-    return read_source_csv(cache_fn)
+    if cache_fn not in DATA_CACHE:
+        DATA_CACHE[cache_fn] = read_source_csv(cache_fn)
+    return DATA_CACHE[cache_fn]
 
 def find_all_runs(source_data_directories:list)->list:
     all_runs = []
