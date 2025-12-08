@@ -84,10 +84,13 @@ TRANSFORMS={
 }
 
 DEFAULT_REPORTING_LEVELS = ['Region','Basin_35','MU_48','WQI_Cal']
+DATA_CACHE={}
 
 def load_reporting_regions(reporting_regions:str,reporting_levels:list):
     if isinstance(reporting_regions,str):
-        reporting_regions = gpd.read_file(reporting_regions)
+        if reporting_regions not in DATA_CACHE:
+            DATA_CACHE[reporting_regions] = gpd.read_file(reporting_regions)
+        reporting_regions = DATA_CACHE[reporting_regions]
     if reporting_levels is None:
         reporting_levels = DEFAULT_REPORTING_LEVELS
     reporting_regions = reporting_regions[['SUBCAT']+reporting_levels]
@@ -177,7 +180,6 @@ def ensure_cache(fn,data_cache):
         shutil.copy(fn,cache_fn)
     return cache_fn
 
-DATA_CACHE={}
 def read_xml(fn,data_cache):
     cache_fn = ensure_cache(fn,data_cache)
     # Read the xml and create a single row dataframe using the elements under the root element as columns
