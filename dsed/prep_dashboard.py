@@ -10,7 +10,7 @@ import geopandas as gpd
 import hydrograph as hg
 from string import Template
 from . import RunDetails
-from .const import M_TO_KM, G_TO_KG, CM3_TO_M3, M_TO_MM
+from .const import M_TO_KM, G_TO_KG, CM3_TO_M3, M_TO_MM, MM_TO_ML_PER_HA
 from .post import run_regional_contributor, back_calculate, MassBalanceBuilder
 from .post.streambank import compute_streambank_parameters
 from .util import read_source_csv
@@ -75,7 +75,8 @@ def compute_generated_loads(raw,params,rsdr):
         exported = exported[columns]
     else:
         exported = pd.DataFrame(columns=loads.columns)
-    return pd.concat([loads,unrelated,generated,exported])
+    to_concat = [tbl for tbl in [loads,generated,unrelated,exported] if len(tbl)]
+    return pd.concat(to_concat)
 
 TRANSFORMS={
     'raw':add_per_year,
@@ -386,7 +387,7 @@ def process_storage_trapping(raw,storage_list):
         return pd.DataFrame()
     stats['Trapping Efficiency'] = 100.0 * (1 - stats["Yield"]/(stats["Loss"]+stats["Residual"]+stats["Yield"]))
     rows = pd.melt(stats.reset_index(),id_vars=pivot_index,value_name='Total_Load_in_Kg',var_name='BudgetElement')
-    result = rows[rows.BudgetElement.isin(['Trapping Efficiency'])]
+    result = rows[rows.BudgetElement.isin(['Trapping Efficiency'])].copy()
     result['Process'] = 'Storage Trapping'
 
     return result
@@ -417,6 +418,7 @@ def compute_climate_metrics(climate,fu_areas,years):
         pivot['Baseflow Coeff'] = pivot['Baseflow']/pivot['Rainfall']
         pivot['Runoff Coeff'] = pivot['Runoff (QuickFlow)']/pivot['Rainfall']
         pivot['QF:SF'] = pivot['Runoff (QuickFlow)']/pivot['Baseflow']
+        pivot['Areal flow rate (ML/ha)'] = (pivot['Runoff (QuickFlow)'] + pivot['Baseflow']) * MM_TO_ML_PER_HA
         pivot['Scale'] = scale_label
         if 'CATCHMENT' in grouping_columns:
             pivot['rc'] = pivot['REGION'] + '-' + pivot['CATCHMENT']
@@ -767,7 +769,7 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
                     model_parameter_index[v] = False
                     model_parameter_index.loc[model_parameter_index[marker]==v,v] = True
             if 'DEFAULT WET' in model_parameter_index.columns:
-                model_parameter_index['DEFAULT WET'].fillna(model_parameter_index['DEFAULT'],inplace=True)
+                model_parameter_index['DEFAULT WET'] = model_parameter_index['DEFAULT WET'].astype('object').fillna(model_parameter_index['DEFAULT'],inplace=True)
         ds.add_table(model_parameter_index,role='model-parameter')
 
         return None
@@ -780,15 +782,13 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
     mb_jobs = []
     for run in runs:
         region_subset = reporting_regions_df[reporting_regions_df[reporting_levels[0]]==run['model']]
-        mb_jobs.append(client.submit(prep_massbalance,run,region_subset,data_cache,mb_dataset.path,network_data_dir))
+        mb_jobs.append(client.submit(prep_massbalance,run,region_subset,data_cache,mb_dataset.path,network_data_dir,priority=10))
 
     def combine_mb_indexes(*indexes):
-        mb_dataset = open_hg('massbalance',hg.MODE_READ_WRITE)
-        mb_dataset.rewrite(False)
+        dest = os.path.join(dashboard_data_dir,'massbalance')
         logger.info('Combining %d indexes',len(indexes))
-        for index in indexes:
-            mb_dataset._add_index(index)
-        mb_dataset.rewrite(True)
+        hg.write_combined_index(dest,indexes)
+
     futures.append(client.submit(combine_mb_indexes,*mb_jobs))
 
     main_results = client.gather(main_jobs,errors='raise')
@@ -805,14 +805,19 @@ def prep(source_data_directories:list,dashboard_data_dir:str,data_cache:str=None
 
 def build_report_card_datasets(source_data,observed_loads_fn,constituents,
                                fus_of_interest,num_years,subcatchment_lut_fn,
-                               overall_label,loads_obs_column,dashboard_data_dir):
+                               overall_label,loads_obs_column,dashboard_data_dir,
+                               reporting_scales,client=None):
     logger.info('Building report card datasets')
     from .post import report_card as rc
-    rc.progress = rc.nop
-    rc.OVERALL_REGION = overall_label
-    rc.OBSERVATION_COLUMN=loads_obs_column
-    rc.populate_load_comparisons(source_data,observed_loads_fn,constituents,dashboard_data_dir)
-    rc.populate_overview_data(source_data,subcatchment_lut_fn,constituents,fus_of_interest,num_years,dashboard_data_dir)
+    if client is None:
+        from dask.distributed import get_client
+        client = get_client()
+    client.run(rc.initialise,rc.nop,overall_label,loads_obs_column)
+    # rc.populate_load_comparisons(source_data,observed_loads_fn,constituents,dashboard_data_dir,client=client)
+    f = client.submit(rc.populate_load_comparisons,source_data,observed_loads_fn,constituents,dashboard_data_dir)
+    res = rc.populate_overview_data(source_data,subcatchment_lut_fn,constituents,fus_of_interest,num_years,dashboard_data_dir,reporting_scales,client=client)
+    f.result()
+    # return res
 
 def host(dashboard_data_dir:str):
     port = 8765

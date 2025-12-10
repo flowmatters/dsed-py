@@ -11,6 +11,7 @@ import numpy as np
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import hydrograph as hg
+from dask.distributed import get_client
 from matplotlib.sankey import Sankey
 import logging
 logger = logging.getLogger(__name__)
@@ -50,6 +51,15 @@ PARAS_COMPARE_LATEST = [
 progress=print
 def nop(*args, **kwargs):
     pass
+
+def initialise(progress_func=nop,overall_region=OVERALL_REGION,observation_column=OBSERVATION_COLUMN):
+    global progress
+    global OVERALL_REGION
+    global OBSERVATION_COLUMN
+
+    progress = progress_func
+    OVERALL_REGION = overall_region
+    OBSERVATION_COLUMN = observation_column
 
 DATA_CACHE={}
 
@@ -182,27 +192,25 @@ def scale_all_dfs(dfs,scale):
         return df * scale
     return process_all_dfs(dfs,process)
 
-def concat_data_frames_at_level(dfs,level,drop=True):
+def concat_data_frames_at_level(dfs,level,drop=True,axis=1):
     if level > 0:
-        return {k: concat_data_frames_at_level(v,level-1,drop) for k,v in dfs.items()}
+        return {k: concat_data_frames_at_level(v,level-1,drop,axis=axis) for k,v in dfs.items()}
 
     entries = list(dfs.items())
     if not len(entries):
         return pd.DataFrame()
 
-    if isinstance(entries[0][1],pd.DataFrame):
-        result = pd.concat([v for k,v in entries],axis=1,keys=[k for k,v in entries])
+    if any(isinstance(entry[1],pd.DataFrame) for entry in entries):
+        data_frames = [v for _,v in entries]
+        result = pd.concat(data_frames,axis=axis,keys=[k for k,v in entries])
         if drop:
-            result = result.T.droplevel(1).T
+            if axis==0:
+                result = result.droplevel(0)
+            else:
+                result = result.T.droplevel(1).T
         return result
 
-    inverted = {}
-    for k0,v0 in entries:
-        for k1,v1 in v0.items():
-            if k1 not in inverted:
-                inverted[k1] = {}
-            inverted[k1][k0] = v1
-    return concat_data_frames_at_level(inverted,level+1,drop)
+    return concat_data_frames_at_level(_invert_dict(entries),level+1,drop,axis=axis)
 
 def concat_all_dataframes(dfs):
     df_list = []
@@ -221,6 +229,7 @@ def sum_data_frames_at_level(dfs,level,sum_axis):
         return {k: sum_data_frames_at_level(v,level-1,sum_axis) for k,v in dfs.items()}
 
     entries = list(dfs.items())
+    entries = [(k,v) for k,v in entries if v is not None]
     if not len(entries):
         return pd.DataFrame()
 
@@ -235,15 +244,22 @@ def sum_data_frames_at_level(dfs,level,sum_axis):
             raise ValueError('Inconsistent types at level %d'%level)
         sums = [v.sum(axis=sum_axis) for v in dfs]
         result = pd.concat(sums,axis=1,keys=[k for k,v in entries])#.T.droplevel(1).T
+        if sum_axis==0:
+            result = result.T
         return result
 
-    inverted = {}
+    return sum_data_frames_at_level(_invert_dict(entries),level+1,sum_axis)
+
+def _invert_dict(entries):
+    result = {}
     for k0,v0 in entries:
+        if v0 is None:
+            continue
         for k1,v1 in v0.items():
-            if k1 not in inverted:
-                inverted[k1] = {}
-            inverted[k1][k0] = v1
-    return sum_data_frames_at_level(inverted,level+1,sum_axis)
+            if k1 not in result:
+                result[k1] = {}
+            result[k1][k0] = v1
+    return result
 
 def create_output_directories(base,regions):
     reportcardOutputsPrefix = Path(base)
@@ -329,8 +345,13 @@ def ensure_paths_have_files(paths):
     assert empty_count == 0, f"{empty_count} paths are empty"
 
 # def for_each_region_model()
+CACHE_IDENTIFIED_REGIONS=None
+CACHE_CONTRIBUTOR=None
 
 def identify_regions_and_models(main_path):
+    global CACHE_IDENTIFIED_REGIONS
+    if CACHE_IDENTIFIED_REGIONS is not None:
+        return CACHE_IDENTIFIED_REGIONS
     regions = [d for d in os.listdir(main_path) if os.path.isdir(os.path.join(main_path,d))]
     runs = set()
     assert len(regions), f'No regions found in {main_path}'
@@ -346,9 +367,14 @@ def identify_regions_and_models(main_path):
     scenarios = [m.split('_')[0] for m in runs]
     report_cards = set(['_'.join(r.split('_')[1:]) for r in runs])
     assert len(report_cards) == 1, f"Expected exactly one report card type, found {report_cards}"
-    return regions,runs,scenarios,list(report_cards)[0]
+    CACHE_IDENTIFIED_REGIONS = (regions,runs,scenarios,list(report_cards)[0])
+    return CACHE_IDENTIFIED_REGIONS
 
 def read_regional_contributor(main_path,sc_region_lut):
+    global CACHE_CONTRIBUTOR
+    if CACHE_CONTRIBUTOR is not None:
+        return CACHE_CONTRIBUTOR
+
     regions, runs, scenarios, rc = identify_regions_and_models(main_path)
     result = {}
     sc_region_lut = load_lut(sc_region_lut)
@@ -368,7 +394,8 @@ def read_regional_contributor(main_path,sc_region_lut):
             RegContributorDataGrid_fil_df = pd.merge(RegContributorDataGrid_fil_df, regLUT, on='ModelElement')
             RegContributorDataGrid_fil_df = rename_constituents(RegContributorDataGrid_fil_df)
             result[region][model] = RegContributorDataGrid_fil_df
-    return result
+    CACHE_CONTRIBUTOR = result
+    return CACHE_CONTRIBUTOR
 
 FILL_FUS=['Bananas','Dairy','Sugarcane']
 def add_columns_for_missing_fus(df):
@@ -376,7 +403,7 @@ def add_columns_for_missing_fus(df):
         if fu not in df:
             df[fu] = np.nan
 
-def load_basin_export_tables(regional_contributor,constituents,fus_of_interest,filter=None):
+def load_basin_export_tables(regional_contributor,constituents,fus_of_interest,scale,filter=None):
     if filter is None:
         filter = {}
     result = {}
@@ -393,8 +420,14 @@ def load_basin_export_tables(regional_contributor,constituents,fus_of_interest,f
 
             for k,v in filter.items():
                 data = data[data[k]==v]
-            data_summary = data.reset_index().groupby(['MU_48','Constituent','FU']).sum(numeric_only=True)
-            basins = data_summary.index.levels[0]
+            group_columns = ['Constituent','FU']
+            if scale is not None:
+                group_columns = [scale] + group_columns
+            data_summary = data.reset_index().groupby(group_columns).sum(numeric_only=True)
+            if scale is None:
+                basins = [OVERALL_REGION]
+            else:
+                basins = data_summary.index.levels[0]
 
 
             for basin in basins:
@@ -453,7 +486,7 @@ def build_overall_export_tables(regions,models,region_load_to_reg_export):
         result[model] = overall_sum_FU
     return result
 
-def process_based_basin_export_tables(constituents,regional_contributor,**filters):
+def process_based_basin_export_tables(constituents,regional_contributor,scale,**filters):
     result = {}
 
     for region, region_data in regional_contributor.items():
@@ -466,8 +499,13 @@ def process_based_basin_export_tables(constituents,regional_contributor,**filter
                 continue
             for k,v in filters.items():
                 data = data[data[k]==v]
+            data = data[data.Constituent.isin(constituents)]
             # data_summary_Process = data.reset_index().groupby(['Rep_Region','Constituent','Process']).sum()
-            data_summary_Process = data.reset_index().groupby(['MU_48','Constituent','Process']).sum()
+            
+            assert scale is not None
+            group_columns = [scale, 'Constituent','Process']
+
+            data_summary_Process = data.reset_index().groupby(group_columns).sum()
             basins = data_summary_Process.index.levels[0]
 
 
@@ -572,7 +610,7 @@ def getRegion_cat_node_link_Path(main_path,regionIDString):
     regFileIn = os.path.join(regLUTPath, 'Regions', regionIDString + REGION_LUT_NODE_SC_FILENAME)
     return regFileIn
 
-def region_source_sink_summary(main_path,regions,models,rc,subcatchments):
+def region_source_sink_summary(main_path,regions,models,rc,subcatchments,scale):
     result = {}
 
     full_lut = load_lut(subcatchments)
@@ -599,7 +637,7 @@ def region_source_sink_summary(main_path,regions,models,rc,subcatchments):
             #Join the reg Cont table and the regions df
             RawResult_fil_df = pd.merge(RawResult_fil_df, regLUT, on='ModelElement')
 
-            Regional_source_sink = pd.DataFrame(RawResult_fil_df.groupby(['MU_48','Constituent','Process','BudgetElement']).agg({'Total_Load_in_Kg':'sum'})).reset_index()
+            Regional_source_sink = pd.DataFrame(RawResult_fil_df.groupby([scale,'Constituent','Process','BudgetElement']).agg({'Total_Load_in_Kg':'sum'})).reset_index()
 
             Regional_source_sink = rename_constituents(Regional_source_sink)
             result[region][model] = Regional_source_sink
@@ -607,7 +645,7 @@ def region_source_sink_summary(main_path,regions,models,rc,subcatchments):
     return result
 
 
-def source_sink_by_basin(regions, models, constituents,core_constituents,regional_source_sinks):
+def source_sink_by_basin(regions, models, constituents,core_constituents,regional_source_sinks,scale):
     result = {}
     for region in regions:
         result[region] = {}
@@ -619,7 +657,7 @@ def source_sink_by_basin(regions, models, constituents,core_constituents,regiona
                 result[region][model] = None
                 continue
         #data_summary_Budget = data.groupby(['SummaryRegion','Constituent','BudgetElement']).sum(numeric_only = True)
-            data_summary_Budget = data.groupby(['MU_48','Constituent','BudgetElement']).sum(numeric_only = True)
+            data_summary_Budget = data.groupby([scale,'Constituent','BudgetElement']).sum(numeric_only = True)
 
             basins = data_summary_Budget.index.levels[0]
 
@@ -756,18 +794,29 @@ def overall_source_sink_budget(regions,core_constituents,regional_source_sink):
 
     return result
 
-def lu_area_by_region(main_path,fus):
+def lu_area_by_region(main_path,fus,subcatchment_lut,scale=None):
     regions,runs,scenarios,rc = identify_regions_and_models(main_path)
     base_scenario = [m for m in runs if m.startswith('BASE')][0]
     result = {}
 
     for region in regions:
-        progress(region)
+        area_table = load_model_results(main_path,region,base_scenario,'fuAreasTable.csv')
+        # merge with subcatchment_lut
+        index_cols = []
+        if scale is not None:
+            region_lut = subcatchment_lut[subcatchment_lut.Region==region]
+            area_table = pd.merge(area_table,region_lut,how='inner',left_on='Catchment',right_on='ModelElement')
+            # print(area_table)
+            index_cols = [scale]
+        group_cols = index_cols + ['FU']
 
-        fuAreaTable = load_model_results(main_path,region,base_scenario,'fuAreasTable.csv')
+        area_summary = area_table.groupby(group_cols).sum(numeric_only= True)
 
-        fuArea_summary = fuAreaTable.groupby(['FU']).sum(numeric_only= True)
-        fuArea = fuArea_summary.T
+        if len(index_cols):
+            area_summary = area_summary.reset_index()
+            fuArea = area_summary.pivot(index=scale,columns='FU',values='Area')
+        else:
+            fuArea = area_summary.T
         #fuArea['Grazing'] = fuArea['Grazing Forested'] + fuArea['Grazing Open']
         fuArea['Cropping'] = fuArea['Dryland Cropping'] + fuArea['Irrigated Cropping']
         fuArea['Urban + Other'] = fuArea['Other'] + fuArea['Urban']
@@ -2297,7 +2346,7 @@ def plot_annual_all_sites(output_path,regions,site_list,annual_by_quality):
 ### Temporarily stored REGSOURCESINKSUMMARY are used below to do number crunching to produce various plots
 ### LoadToStream are estimated below for all BASINs by FUs of interest and CONSTITUENTs of interest
 ### NO UNIT CONVERSION IS DONE HERE - all units are similar to that of REGSOURCESINKSUMMARY
-def land_use_supply_by_basin(constituents,regional_contributions,fus_of_interest):
+def land_use_supply_by_basin(constituents,regional_contributions,fus_of_interest,scale):
     BasinLoadToStream_FU = {}
 
     for region, region_data in regional_contributions.items():
@@ -2310,7 +2359,12 @@ def land_use_supply_by_basin(constituents,regional_contributions,fus_of_interest
             if data is None:
                 continue
             # data_summary = data.reset_index().groupby(['Rep_Region','Constituent','FU']).sum()
-            data_summary = data.reset_index().groupby(['MU_48','Constituent','FU']).sum(numeric_only = True)
+            
+            group_columns = ['Constituent','FU']
+            if scale is not None:
+                group_columns = [scale] + group_columns
+
+            data_summary = data.reset_index().groupby(group_columns).sum(numeric_only = True)
             BASINs = data_summary.index.levels[0]
 
             for basin in BASINs:
@@ -2613,6 +2667,8 @@ def plot_sankey_diagrams(output_path,sankey_regions,sankey_basins,source_sink_bu
             save_figure(os.path.join(output_path,region,'budgetExports_sankeyDiagrams',basin + '_budget_TSS.png'))
 
 def load_all_tables(ds,dfs,tag_names,**kwargs):
+    if not len(dfs):
+        return
     tag_name = tag_names[0]
     tag_names = tag_names[1:]
     for tag_value,collection in dfs.items():
@@ -2686,7 +2742,8 @@ def load_observed_loads(loads_data_fn):
 def populate_load_comparisons(source_data,loads_data_fn,constituents,dest_data):
     regions,runs,scenarios,report_card = identify_regions_and_models(source_data)
 
-    compare_ds = hg.open_dataset(os.path.join(dest_data,'load-comparisons'),mode='w')
+    dest_path = os.path.join(dest_data,'load-comparisons')
+    compare_ds = hg.open_dataset(dest_path,mode='w')
     compare_ds.rewrite(False)
     loads = load_observed_loads(loads_data_fn)
     measured_annual_regions = collate_measured_annual_regions(loads)
@@ -2807,48 +2864,163 @@ def compute_overall_change(contributor,num_years):
 
     return region_table, amc_table
 
-def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_interest,num_years,dest_data):
+def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_interest,num_years,dest_data,reporting_scales,client=None):
+    futures = []
+    if client is None:
+        client = get_client()
+
     per_year = 1/num_years
     regions,runs,scenarios,report_card = identify_regions_and_models(source_data)
-    overview_ds = hg.open_dataset(os.path.join(dest_data,'overview'),mode='w')
+    overview_dest = os.path.join(dest_data,'overview')
+    overview_ds = hg.open_dataset(overview_dest,mode='w')
     overview_ds.rewrite(False)
+
+    first_scale = True
+    for reporting_scale in reporting_scales:
+        if reporting_scale == 'Subcatchment':
+            continue
+
+        for fu in fus_of_interest+[None]:
+            for constituent in constituents:
+                futures.append(client.submit(compute_process_results,source_data,subcatchment_lut,constituent,fu,reporting_scale,per_year,dest_data,first_scale, priority=10 if (first_scale or fu is None) else 0))
+        first_scale = False
+
+    futures.append(client.submit(compute_landuse_results,
+                                 source_data,subcatchment_lut,constituents,fus_of_interest,reporting_scales,scenarios,regions,per_year,dest_data))
+
+    for reporting_scale in reporting_scales:
+        for process in ['All','Gully', 'Streambank', 'Hillslope surface soil', 'Hillslope subsurface soil', 'Hillslope no source distinction', 'Undefined',
+                        'Channel Remobilisation', 'Diffuse Dissolved']:
+            for fu in ['All'] + fus_of_interest:
+                filter = {}
+                if process != 'All':
+                    filter['Process'] = process
+                if fu != 'All':
+                    filter['FU'] = fu
+                
+                futures.append(client.submit(compute_anthropogenic_results,source_data,subcatchment_lut,constituents,reporting_scale,fus_of_interest,num_years,filter,dest_data,process=process,fu=fu))
+
+    REGCONTRIBUTIONDATAGRIDS = read_regional_contributor(source_data,subcatchment_lut)
+    overall_change, average_mean_concentration = compute_overall_change(REGCONTRIBUTIONDATAGRIDS,num_years)
+    overview_ds.add_table(overall_change,aggregation='overall-change')
+    overview_ds.add_table(average_mean_concentration,aggregation='average-mean-concentration')
+    overview_ds.rewrite(True)
+
+    extra_indexes = []
+    logger.info("Waiting for %d tasks", len(futures))
+    for f in futures:
+        logger.info("Waiting for future %s", f.key)
+        extra_indexes.append(f.result())
+    hg.write_combined_index(overview_dest,extra_indexes)
+
+    # return BasinLoadToRegExport_FU, REGCONTRIBUTIONDATAGRIDS
+
+def compute_anthropogenic_results(source_data,subcatchment_lut,constituents,reporting_scale,fus_of_interest,num_years,filter,dest,**kwargs):
+    overview_ds = hg.open_dataset(os.path.join(dest,'overview'),mode=hg.MODE_WRITE_NO_INDEX)
+
+    if reporting_scale == 'Subcatchment':
+        scale = 'ModelElement'
+    else:
+        scale = reporting_scale
+
+    subcatchment_lut = load_lut(subcatchment_lut)
+    REGCONTRIBUTIONDATAGRIDS = read_regional_contributor(source_data,subcatchment_lut)
+    BasinLoadToRegExport_FU = load_basin_export_tables(REGCONTRIBUTIONDATAGRIDS,constituents,fus_of_interest,scale,filter=filter)
+    fixed_tags = dict(aggregation='anthropogenic',reporting_scale=reporting_scale,units='kg/yr',**kwargs)
+    anthropogenic_exports = compute_anthropogenic_summary(BasinLoadToRegExport_FU,constituents,num_years)
+    load_all_tables(overview_ds,anthropogenic_exports,['constituent','region','summary'],**fixed_tags)
+
+    def join_index_levels(df):
+        if isinstance(df.index[0],tuple):
+            df.index = df.index.map(lambda idx: '-'.join([str(i) for i in idx]))
+        return df
+
+    total_anthropogenic_export = concat_data_frames_at_level(anthropogenic_exports,1,drop=reporting_scale!='Subcatchment',axis=0)
+    total_anthropogenic_export = process_all_dfs(total_anthropogenic_export,join_index_levels)
+    load_all_tables(overview_ds,total_anthropogenic_export,['constituent','summary'],region=OVERALL_REGION,**fixed_tags)
+
+    fixed_tags['units'] = 'kg/ha/yr'
+    real_fus_of_interest = [fu for fu in fus_of_interest if fu != 'Stream']
+    lu_scale = 'ModelElement' if reporting_scale == 'Subcatchment' else reporting_scale
+    lu = lu_area_by_region(source_data,real_fus_of_interest,subcatchment_lut,lu_scale)
+    RegionFU_Area_ha = scale_all_dfs(lu,c.M2_TO_HA)
+    def total_area(df):
+        if 'FU' in filter:
+            if filter['FU'] in df.columns:
+                df = df[[filter['FU']]]
+            else:
+                return pd.Series(0.0,index=df.columns,name='Area').to_frame()
+        return df.sum().rename('Area').to_frame()
+    RegionFU_Area_ha = process_all_dfs(RegionFU_Area_ha,total_area)
+    # print(RegionFU_Area_ha)
+    # print(anthropogenic_exports)
+    # assert False
+    def by_area(df,*tags):
+        region = tags[1]
+        result = per_area(df,RegionFU_Area_ha[region])
+        if isinstance(result,float):
+            return None
+        return result
+    anthropogenic_exports = process_all_dfs(anthropogenic_exports,by_area,tags=True)
+    load_all_tables(overview_ds,anthropogenic_exports,['constituent','region','summary'],**fixed_tags)
+
+    # overall_area_ha = sum_data_frames_at_level(RegionFU_Area_ha,0,0)
+    # total_anthropogenic_export = process_all_dfs(total_anthropogenic_export,lambda df:per_area(df,overall_area_ha))
+    try:
+        total_anthropogenic_export = concat_data_frames_at_level(anthropogenic_exports,1,drop=reporting_scale!='Subcatchment',axis=0)
+    except:
+        show_tree(anthropogenic_exports)
+        raise
+    total_anthropogenic_export = process_all_dfs(total_anthropogenic_export,join_index_levels)
+    load_all_tables(overview_ds,total_anthropogenic_export,['constituent','summary'],region=OVERALL_REGION,**fixed_tags)
+    return overview_ds.index
+
+
+def compute_process_results(source_data,subcatchment_lut,constituent,fu,reporting_scale,per_year,dest,aggregate_all):
+    overview_ds = hg.open_dataset(os.path.join(dest,'overview'),mode=hg.MODE_WRITE_NO_INDEX)
     REGCONTRIBUTIONDATAGRIDS = read_regional_contributor(source_data,subcatchment_lut)
     BasinLoadToRegExport_Process = {}
-    for fu in fus_of_interest+[None]:
-        if fu is None:
-            BasinLoadToRegExport_Process['All'] = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS)
-        else:
-            BasinLoadToRegExport_Process[fu] = process_based_basin_export_tables(constituents,REGCONTRIBUTIONDATAGRIDS,FU=fu)
+
+    if fu is None:
+        BasinLoadToRegExport_Process['All'] = process_based_basin_export_tables([constituent],REGCONTRIBUTIONDATAGRIDS,scale=reporting_scale)
+    else:
+        BasinLoadToRegExport_Process[fu] = process_based_basin_export_tables([constituent],REGCONTRIBUTIONDATAGRIDS,FU=fu,scale=reporting_scale)
     BasinLoadToRegExport_Process_PC = to_percentage_of_whole(BasinLoadToRegExport_Process)
     process_based_export = {
         '%': BasinLoadToRegExport_Process_PC,
         'kg/yr': scale_all_dfs(BasinLoadToRegExport_Process,per_year)
     }
 
-    process_export_aggregated = concat_data_frames_at_level(process_based_export,4)
-    load_all_tables(overview_ds,process_export_aggregated,['units','fu','region','scenario','constituent'],aggregation='process')
-    process_export_by_region = sum_data_frames_at_level(process_export_aggregated,2,1)
-    process_export_by_region['%'] = to_percentage_of_whole(process_export_by_region['kg/yr'])
-    load_all_tables(overview_ds,process_export_by_region,['units','fu','scenario','constituent'],aggregation='process',region=OVERALL_REGION)
+    process_export_aggregated = concat_data_frames_at_level(process_based_export,4) # 
+    load_all_tables(overview_ds,process_export_aggregated,['units','fu','region','scenario','constituent'],aggregation='process',reporting_scale=reporting_scale)
 
-    BasinLoadToStream_FU = land_use_supply_by_basin(constituents,REGCONTRIBUTIONDATAGRIDS,fus_of_interest)
+    if aggregate_all:
+        process_export_by_region={}
+        process_export_by_region['kg/yr'] = sum_data_frames_at_level(process_export_aggregated['kg/yr'],1,1)
+        process_export_by_region['%'] = to_percentage_of_whole(process_export_by_region['kg/yr'])
+        load_all_tables(overview_ds,process_export_by_region,['units','fu','scenario','constituent'],aggregation='process',region=OVERALL_REGION)
+    return overview_ds.index
+
+def compute_landuse_results(source_data,subcatchment_lut,constituents,fus_of_interest,reporting_scales,scenarios,regions,per_year,dest):
+    overview_ds = hg.open_dataset(os.path.join(dest,'overview'),mode=hg.MODE_WRITE_NO_INDEX)
+    REGCONTRIBUTIONDATAGRIDS = read_regional_contributor(source_data,subcatchment_lut)
+    BasinLoadToStream_FU = land_use_supply_by_basin(constituents,REGCONTRIBUTIONDATAGRIDS,fus_of_interest,scale=reporting_scales[0]) # TODO CHECK
     # ### FU area estimation for all 6 REGIONs
 
     real_fus_of_interest = [fu for fu in fus_of_interest if fu != 'Stream']
-    RegionFU_Area_ha = scale_all_dfs(lu_area_by_region(source_data,real_fus_of_interest),c.M2_TO_HA)
+    RegionFU_Area_ha = scale_all_dfs(lu_area_by_region(source_data,real_fus_of_interest,subcatchment_lut),c.M2_TO_HA)
     # streamLengths = stream_lengths(MAIN_PATH,REGIONS,REGION_NAMES,RC)
     # fu_area_summary.insert(loc=FUS_OF_INTEREST.index('Stream'), column='Stream (km)', value=streamLengths['Stream'])
 
     landuse_based_supply = {}
     for model in scenarios:
-        print(f'Processing model {model}')
         landuse_based_supply[model] = {}
         RegionLoadToStream_FU_per_year = scale_all_dfs(land_use_supply_by_region(BasinLoadToStream_FU,model),per_year)
         landuse_based_supply[model]['kg/yr'] = RegionLoadToStream_FU_per_year
         landuse_based_supply[model]['kg/ha/yr'] = process_two_sets_of_dfs(RegionLoadToStream_FU_per_year,RegionFU_Area_ha,per_area)
         landuse_based_supply[model]['%'] = to_percentage_of_whole(RegionLoadToStream_FU_per_year)
 
-    BasinLoadToRegExport_FU = load_basin_export_tables(REGCONTRIBUTIONDATAGRIDS,constituents,fus_of_interest)
+    BasinLoadToRegExport_FU = load_basin_export_tables(REGCONTRIBUTIONDATAGRIDS,constituents,fus_of_interest,scale=reporting_scales[0])
     RegionLoadToRegExport_FU = build_region_export_tables(BasinLoadToRegExport_FU)
 
     RegionLoadToRegExport_FU_by_model = {}
@@ -2861,37 +3033,27 @@ def populate_overview_data(source_data,subcatchment_lut,constituents,fus_of_inte
     landuse_based_export = {}
     RegionLoadToRegExport_FU_by_model_per_year = scale_all_dfs(RegionLoadToRegExport_FU_by_model,per_year)
     for model in scenarios:
-        print(f'Processing model {model}')
         landuse_based_export[model] = {}
         data = RegionLoadToRegExport_FU_by_model_per_year[model]
         landuse_based_export[model]['kg/yr'] = data
         landuse_based_export[model]['kg/ha/yr'] = process_two_sets_of_dfs(data,RegionFU_Area_ha,per_area)
-        landuse_based_export[model]['%'] = to_percentage_of_whole(data)\
+        landuse_based_export[model]['%'] = to_percentage_of_whole(data)
 
     landuse_loads = {
         'supply': landuse_based_supply,
         'export': landuse_based_export
     }
 
-    load_all_tables(overview_ds,landuse_loads,['load_type','scenario','units','region'],aggregation='landuse')
+    load_all_tables(overview_ds,landuse_loads,['load_type','scenario','units','region'],aggregation='landuse',reporting_scale=reporting_scales[0])
+    return overview_ds.index
 
-    for process in ['All','Gully', 'Streambank', 'Hillslope surface soil', 'Hillslope subsurface soil', 'Hillslope no source distinction', 'Undefined',
-                    'Channel Remobilisation', 'Diffuse Dissolved']:
-        filter = {}
-        if process != 'All':
-            filter['Process'] = process
-
-        for fu in ['All'] + fus_of_interest:
-            if fu != 'All':
-                filter['FU'] = fu
-            BasinLoadToRegExport_FU = load_basin_export_tables(REGCONTRIBUTIONDATAGRIDS,constituents,fus_of_interest,filter=filter)
-
-            antrhopogenic_exports = compute_anthropogenic_summary(BasinLoadToRegExport_FU,constituents,num_years)
-            load_all_tables(overview_ds,antrhopogenic_exports,['constituent','region','summary'],aggregation='anthropogenic',process=process,fu=fu)
-
-    overall_change, average_mean_concentration = compute_overall_change(REGCONTRIBUTIONDATAGRIDS,num_years)
-    overview_ds.add_table(overall_change,aggregation='overall-change')
-    overview_ds.add_table(average_mean_concentration,aggregation='average-mean-concentration')
-
-    overview_ds.rewrite(True)
-
+def show_tree(dfs,level=0):
+    indent = '  '*level
+    if isinstance(dfs,pd.DataFrame):
+        print(f"{indent}DataFrame with shape {dfs.shape}")
+    elif isinstance(dfs,dict):
+        for k,v in dfs.items():
+            print(f"{indent}{k}:")
+            show_tree(v,level+1)
+    else:
+        print(f"{indent}Unknown type {type(dfs)}: {dfs}")
