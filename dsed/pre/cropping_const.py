@@ -98,8 +98,8 @@ P_DOP_PROPORTION = 0.2
 P_FRP_PROPORTION = 0.8
 
 # --- Unit strings used in file naming ---
-UNITS_T_PER_HA = "TperHa"
-UNITS_KG_PER_HA = "KgPerHa"
+UNITS_T_PER_HA = "TPerHa"
+UNITS_KG_PER_HA = "kgPerHa"
 UNITS_G_PER_HA = "gPerHa"
 UNITS_MM = "mm"
 

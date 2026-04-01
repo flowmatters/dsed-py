@@ -22,10 +22,25 @@ from .area_weighted import load_shapefile_data, area_weighted_average, simple_av
 
 logger = logging.getLogger(__name__)
 
+# Map HowLeaky/Rattray file-naming variants to canonical constituent names.
+# scan_raw_directory extracts the raw 3rd-part of the filename, which for
+# HowLeaky files uses different naming conventions to APSIM.  This mapping
+# is applied to scanned constituent names so the dispatch logic in
+# import_howleaky_timeseries matches correctly.
+HL_CONSTITUENT_ALIASES = {
+    cc.HL_EROSION_RATTRAY: cc.FINE_SED,                       # Erosion -> Sediment - Fine
+    cc.HL_N03_RUNOFF_RATTRAY: cc.N_DIN,                       # N03NRunoffLoad -> N_DIN
+    cc.HL_NO3_RUNOFF_CORRECT_RATTRAY: cc.N_DIN,               # NO3NRunoffLoad -> N_DIN
+    cc.HL_DIN_DRAINAGE_RATTRAY: cc.N_DIN,                     # DIN_Drainage -> N_DIN
+    cc.HL_DISSOLVED_P_OUTPUT: cc.P_DOP,                       # Dissolved P Export -> P_DOP
+    cc.HL_PEST_SED_PHASE_RATTRAY: None,                       # handled via pesticide dispatch
+    cc.HL_PEST_WATER_PHASE_RATTRAY: None,                     # handled via pesticide dispatch
+}
+
 
 def _load_timeseries(filepath):
     """Load a single time series CSV with date index."""
-    df = pd.read_csv(filepath, index_col=0, parse_dates=True)
+    df = pd.read_csv(filepath, index_col=0, parse_dates=True,dayfirst=True,header=None,names=['Date','Value'])
     return df.iloc[:, 0]
 
 
@@ -158,7 +173,13 @@ def import_howleaky_timeseries(
         fus = [f for f in fus if f in set(scanned_fus)] or list(fus)
 
     if constituents is None:
-        constituents = scanned_constituents
+        # Map HowLeaky/Rattray naming variants to canonical constituent names
+        mapped = set()
+        for c in scanned_constituents:
+            canonical = HL_CONSTITUENT_ALIASES.get(c, c)
+            if canonical is not None:
+                mapped.add(canonical)
+        constituents = sorted(mapped)
         logger.info("Inferred %d constituents from %s", len(constituents), raw_dir)
     else:
         constituents = list(constituents)
@@ -173,82 +194,92 @@ def import_howleaky_timeseries(
             units_map[c] = cc.UNITS_G_PER_HA
 
     tally = {c: 0 for c in constituents}
+    if cc.P_DOP in constituents:
+        tally[cc.P_FRP] = 0
+    counts_by_catchment = {c: 0 for c in catchments}
+    counts_by_fu = {f: 0 for f in fus}
     collected = {}  # (catchment, fu, variable) -> Series
+
+    # Dispatch table: constituent name -> handler function.
+    # P_FRP maps to None (handled by P_DOP). Unknown constituents use
+    # _process_hl_pesticide as the default.
+    handlers = {
+        cc.FINE_SED: _process_hl_fine_sed,
+        cc.N_DIN: _process_hl_din,
+        cc.P_PARTICULATE: _process_hl_particulate_p,
+        cc.P_DOP: _process_hl_dissolved_p,
+        cc.P_FRP: None,
+        cc.AGGREGATED_RUNOFF: _process_hl_runoff_copy,
+    }
 
     for catchment in catchments:
         for fu in fus:
             runoff_ts = _load_runoff(runoff_source, catchment, fu, separator)
             if runoff_ts is None:
+                logger.warning("No runoff found for %s %s; skipping", catchment, fu)
                 continue
 
             for const_name in constituents:
                 units = units_map.get(const_name, cc.UNITS_G_PER_HA)
-                units_bit = " " + units
+                units_bit = "_" + units
 
-                if const_name == cc.FINE_SED:
-                    results = _process_hl_fine_sed(
-                        raw_dir, runoff_ts, catchment, fu,
-                        units_bit, units, separator
-                    )
-                elif const_name == cc.N_DIN:
-                    results = _process_hl_din(
-                        raw_dir, runoff_ts, catchment, fu,
-                        units_bit, units, separator
-                    )
-                elif const_name == cc.P_PARTICULATE:
-                    results = _process_hl_particulate_p(
-                        raw_dir, runoff_ts, catchment, fu,
-                        units_bit, units, separator
-                    )
-                elif const_name in (cc.P_DOP, cc.P_FRP):
-                    if const_name == cc.P_FRP:
-                        continue
-                    results = _process_hl_dissolved_p(
-                        raw_dir, runoff_ts, catchment, fu,
-                        units_bit, units, separator
-                    )
-                elif const_name == cc.AGGREGATED_RUNOFF:
-                    results = _process_hl_runoff_copy(
-                        raw_dir, catchment, fu,
-                        units_bit, units, separator
-                    )
+                handler = handlers.get(const_name, _process_hl_pesticide)
+                if handler is None:
+                    continue
+
+                results = handler(
+                    raw_dir, runoff_ts, catchment, fu,
+                    const_name, units_bit, units, separator,
+                )
+
+                if not results:
+                    logger.warning("No data found for %s %s %s; skipping",
+                                   catchment, fu, const_name)
+                    continue
+
+                # Update tallies
+                if const_name == cc.P_DOP:
+                    tally[cc.P_DOP] += 1
+                    tally[cc.P_FRP] += 1
                 else:
-                    results = _process_hl_pesticide(
-                        raw_dir, runoff_ts, catchment, fu,
-                        const_name, units_bit, units, separator
-                    )
+                    tally[const_name] += 1
+                counts_by_catchment[catchment] += 1
+                counts_by_fu[fu] += 1
 
-                if results:
-                    # Update tally — dissolved P counts for both DOP and FRP
-                    if const_name == cc.P_DOP:
-                        tally[cc.P_DOP] += 1
-                        tally[cc.P_FRP] += 1
+                for entry in results:
+                    series = entry["series"]
+                    if start_date is not None or end_date is not None:
+                        series = series.loc[start_date:end_date]
+                    s_units = entry.get("units", units)
+                    if output_dir is not None:
+                        fname = _make_output_name(
+                            catchment, fu, entry["constituent"],
+                            entry["suffix"], s_units, separator,
+                            phase=entry.get("phase"),
+                        )
+                        series = series.rename(
+                            _make_column_label(
+                                entry["constituent"], s_units,
+                            )
+                        )
+                        _write_adjusted(output_dir, fname, series)
                     else:
-                        tally[const_name] += 1
+                        var = _make_variable_name(
+                            entry["constituent"], entry["suffix"],
+                            phase=entry.get("phase"),
+                        )
+                        collected[(catchment, fu, var)] = series
 
-                    for entry in results:
-                        series = entry["series"]
-                        if start_date is not None or end_date is not None:
-                            series = series.loc[start_date:end_date]
-                        s_units = entry.get("units", units)
-                        if output_dir is not None:
-                            fname = _make_output_name(
-                                catchment, fu, entry["constituent"],
-                                entry["suffix"], s_units, separator,
-                                phase=entry.get("phase"),
-                            )
-                            series = series.rename(
-                                _make_column_label(
-                                    entry["constituent"], s_units,
-                                )
-                            )
-                            _write_adjusted(output_dir, fname, series)
-                        else:
-                            var = _make_variable_name(
-                                entry["constituent"], entry["suffix"],
-                                phase=entry.get("phase"),
-                            )
-                            collected[(catchment, fu, var)] = series
+    # Report zero-count dimensions
+    for catchment, count in counts_by_catchment.items():
+        if count == 0:
+            logger.error("No files processed for catchment %s", catchment)
+    for fu, count in counts_by_fu.items():
+        if count == 0:
+            logger.error("No files processed for FU %s", fu)
+    for const_name, count in tally.items():
+        if count == 0:
+            logger.error("No files processed for constituent %s", const_name)
 
     logger.info("HowLeaky timeseries import complete: %s", tally)
 
@@ -258,7 +289,7 @@ def import_howleaky_timeseries(
 
 
 def _process_hl_fine_sed(raw_dir, runoff_ts, catchment, fu,
-                         units_bit, units, separator):
+                         const_name, units_bit, units, separator):
     """Process HowLeaky Fine Sediment with Rattray naming fallback.
 
     Returns list of entry dicts, or empty list.
@@ -268,6 +299,7 @@ def _process_hl_fine_sed(raw_dir, runoff_ts, catchment, fu,
 
     path = _find_file(raw_dir, base, rattray)
     if path is None:
+        logger.debug("No Fine Sed file for %s / %s", catchment, fu)
         return []
 
     raw_ts = _load_timeseries(path)
@@ -279,7 +311,7 @@ def _process_hl_fine_sed(raw_dir, runoff_ts, catchment, fu,
 
 
 def _process_hl_din(raw_dir, runoff_ts, catchment, fu,
-                    units_bit, units, separator):
+                    const_name, units_bit, units, separator):
     """Process HowLeaky DIN with Rattray N03/NO3 naming fallbacks and DIN drainage.
 
     Returns list of entry dicts, or empty list.
@@ -290,10 +322,17 @@ def _process_hl_din(raw_dir, runoff_ts, catchment, fu,
 
     path = _find_file(raw_dir, base, rattray_n03, rattray_no3)
     if path is None:
+        logger.debug("No DIN file for %s / %s", catchment, fu)
         return []
 
     raw_ts = _load_timeseries(path)
-    monthly = raw_ts.resample("MS").sum()
+    try:
+        monthly = raw_ts.resample("MS").sum()
+    except Exception as e:
+        logger.error("Error resampling DIN time series for %s %s: %s",
+                     catchment, fu, e)
+        logger.error(raw_ts.head())
+        raise
     adjusted = calculate_intra_monthly_flows(runoff_ts, monthly)
 
     results = [{"constituent": cc.N_DIN, "suffix": cc.TS_DAILY_ADJUSTED,
@@ -320,7 +359,7 @@ def _process_hl_din(raw_dir, runoff_ts, catchment, fu,
 
 
 def _process_hl_particulate_p(raw_dir, runoff_ts, catchment, fu,
-                              units_bit, units, separator):
+                              const_name, units_bit, units, separator):
     """Process HowLeaky Particulate P.
 
     Returns list of entry dicts, or empty list.
@@ -330,6 +369,7 @@ def _process_hl_particulate_p(raw_dir, runoff_ts, catchment, fu,
 
     path = _find_file(raw_dir, base, rattray)
     if path is None:
+        logger.debug("No Particulate P file for %s / %s", catchment, fu)
         return []
 
     raw_ts = _load_timeseries(path)
@@ -341,7 +381,7 @@ def _process_hl_particulate_p(raw_dir, runoff_ts, catchment, fu,
 
 
 def _process_hl_dissolved_p(raw_dir, runoff_ts, catchment, fu,
-                            units_bit, units, separator):
+                            const_name, units_bit, units, separator):
     """Process HowLeaky Dissolved P: produce both DOP and FRP from same input.
 
     Returns list of entry dicts, or empty list.
@@ -351,6 +391,7 @@ def _process_hl_dissolved_p(raw_dir, runoff_ts, catchment, fu,
 
     path = _find_file(raw_dir, base, rattray)
     if path is None:
+        logger.debug("No Dissolved P file for %s / %s", catchment, fu)
         return []
 
     raw_ts = _load_timeseries(path)
@@ -365,8 +406,8 @@ def _process_hl_dissolved_p(raw_dir, runoff_ts, catchment, fu,
     ]
 
 
-def _process_hl_runoff_copy(raw_dir, catchment, fu,
-                            units_bit, units, separator):
+def _process_hl_runoff_copy(raw_dir, runoff_ts, catchment, fu,
+                            const_name, units_bit, units, separator):
     """Process HowLeaky Aggregated Runoff: load as-is.
 
     Returns list of entry dicts, or empty list.
@@ -376,6 +417,7 @@ def _process_hl_runoff_copy(raw_dir, catchment, fu,
 
     path = _find_file(raw_dir, base, rattray)
     if path is None:
+        logger.debug("No Aggregated Runoff file for %s / %s", catchment, fu)
         return []
 
     raw_ts = _load_timeseries(path)
@@ -404,6 +446,7 @@ def _process_hl_pesticide(raw_dir, runoff_ts, catchment, fu,
 
     sed_path = _find_file(raw_dir, base_sed, rattray_sed)
     if sed_path is None:
+        logger.debug("No pesticide sed phase for %s / %s / %s", catchment, fu, const_name)
         return []
 
     raw_ts = _load_timeseries(sed_path)

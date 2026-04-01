@@ -60,15 +60,18 @@ def scan_raw_directory(raw_dir, separator=cc.SEPARATOR):
         # phase info.  Strip known unit suffixes and whitespace.
         raw_const = parts[2]
         # Remove trailing unit tokens like " TperHa", " KgPerHa", " gPerHa", " mm"
-        for suffix in [
-            " " + cc.UNITS_T_PER_HA,
-            " " + cc.UNITS_KG_PER_HA,
-            " " + cc.UNITS_G_PER_HA,
-            " " + cc.UNITS_MM,
-        ]:
-            if raw_const.endswith(suffix):
-                raw_const = raw_const[: -len(suffix)]
-                break
+        # HowLeaky files use underscore-separated units (e.g. "Erosion_TPerHa")
+        # so we check both space and underscore delimiters, case-insensitively.
+        raw_const_lower = raw_const.lower()
+        for unit in [cc.UNITS_T_PER_HA, cc.UNITS_KG_PER_HA, cc.UNITS_G_PER_HA, cc.UNITS_MM]:
+            for sep in [" ", "_"]:
+                suffix = sep + unit
+                if raw_const_lower.endswith(suffix.lower()):
+                    raw_const = raw_const[: -len(suffix)]
+                    break
+            else:
+                continue
+            break
 
         constituents.add(raw_const)
 
@@ -318,63 +321,77 @@ def import_apsim_timeseries(
             units_map[c] = cc.UNITS_G_PER_HA  # pesticide default
 
     tally = {c: 0 for c in constituents}
+    counts_by_catchment = {c: 0 for c in catchments}
+    counts_by_fu = {f: 0 for f in fus}
     collected = {}  # (catchment, fu, variable) -> Series
+
+    # Dispatch table: constituent name -> handler function.
+    # Unknown constituents use _process_pesticide as the default.
+    handlers = {
+        cc.FINE_SED: _process_fine_sed,
+        cc.N_DIN: _process_din,
+        cc.AGGREGATED_RUNOFF: _process_runoff_copy,
+    }
 
     for catchment in catchments:
         for fu in fus:
             runoff_ts = _load_runoff(runoff_source, catchment, fu, separator)
             if runoff_ts is None:
+                logger.warning("No runoff found for %s %s; skipping", catchment, fu)
                 continue
 
             for const_name in constituents:
                 units = units_map.get(const_name, cc.UNITS_G_PER_HA)
 
-                if const_name == cc.FINE_SED:
-                    results = _process_fine_sed(
-                        raw_dir, runoff_ts, catchment, fu,
-                        const_name, units, separator
-                    )
-                elif const_name == cc.N_DIN:
-                    results = _process_din(
-                        raw_dir, runoff_ts, catchment, fu,
-                        const_name, units, separator
-                    )
-                elif const_name == cc.AGGREGATED_RUNOFF:
-                    results = _process_runoff_copy(
-                        raw_dir, catchment, fu,
-                        const_name, units, separator
-                    )
-                else:
-                    results = _process_pesticide(
-                        raw_dir, runoff_ts, catchment, fu,
-                        const_name, units, separator
-                    )
+                handler = handlers.get(const_name, _process_pesticide)
+                results = handler(
+                    raw_dir, runoff_ts, catchment, fu,
+                    const_name, units, separator,
+                )
 
-                if results:
-                    tally[const_name] += 1
-                    for entry in results:
-                        series = entry["series"]
-                        if start_date is not None or end_date is not None:
-                            series = series.loc[start_date:end_date]
-                        s_units = entry.get("units", units)
-                        if output_dir is not None:
-                            fname = _make_output_name(
-                                catchment, fu, entry["constituent"],
-                                entry["suffix"], s_units, separator,
-                                phase=entry.get("phase"),
+                if not results:
+                    logger.warning("No data found for %s / %s / %s; skipping",
+                                   catchment, fu, const_name)
+                    continue
+
+                tally[const_name] += 1
+                counts_by_catchment[catchment] += 1
+                counts_by_fu[fu] += 1
+
+                for entry in results:
+                    series = entry["series"]
+                    if start_date is not None or end_date is not None:
+                        series = series.loc[start_date:end_date]
+                    s_units = entry.get("units", units)
+                    if output_dir is not None:
+                        fname = _make_output_name(
+                            catchment, fu, entry["constituent"],
+                            entry["suffix"], s_units, separator,
+                            phase=entry.get("phase"),
+                        )
+                        series = series.rename(
+                            _make_column_label(
+                                entry["constituent"], s_units,
                             )
-                            series = series.rename(
-                                _make_column_label(
-                                    entry["constituent"], s_units,
-                                )
-                            )
-                            _write_adjusted(output_dir, fname, series)
-                        else:
-                            var = _make_variable_name(
-                                entry["constituent"], entry["suffix"],
-                                phase=entry.get("phase"),
-                            )
-                            collected[(catchment, fu, var)] = series
+                        )
+                        _write_adjusted(output_dir, fname, series)
+                    else:
+                        var = _make_variable_name(
+                            entry["constituent"], entry["suffix"],
+                            phase=entry.get("phase"),
+                        )
+                        collected[(catchment, fu, var)] = series
+
+    # Report zero-count dimensions
+    for catchment, count in counts_by_catchment.items():
+        if count == 0:
+            logger.error("No files processed for catchment %s", catchment)
+    for fu, count in counts_by_fu.items():
+        if count == 0:
+            logger.error("No files processed for FU %s", fu)
+    for const_name, count in tally.items():
+        if count == 0:
+            logger.error("No files processed for constituent %s", const_name)
 
     logger.info("APSIM timeseries import complete: %s", tally)
 
@@ -491,7 +508,7 @@ def _process_din(raw_dir, runoff_ts, catchment, fu,
     return results
 
 
-def _process_runoff_copy(raw_dir, catchment, fu,
+def _process_runoff_copy(raw_dir, runoff_ts, catchment, fu,
                          const_name, units, separator):
     """Process Aggregated Runoff: load as-is (no adjustment).
 
