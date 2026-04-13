@@ -325,12 +325,17 @@ def import_apsim_timeseries(
     counts_by_fu = {f: 0 for f in fus}
     collected = {}  # (catchment, fu, variable) -> Series
 
-    # Dispatch table: constituent name -> handler function.
-    # Unknown constituents use _process_pesticide as the default.
     handlers = {
         cc.FINE_SED: _process_fine_sed,
         cc.N_DIN: _process_din,
         cc.AGGREGATED_RUNOFF: _process_runoff_copy,
+        # Water-flux variables: copy as-is, no runoff adjustment
+        cc.RAIN: _process_simple_copy,
+        cc.RUNOFF: _process_simple_copy,
+        cc.DRAINAGE: _process_simple_copy,
+        cc.IRRIGATION: _process_simple_copy,
+        # Standalone NLeached: runoff-adjusted load
+        cc.APSIM_NLEACHED_FIELD: _process_nleached,
     }
 
     for catchment in catchments:
@@ -489,21 +494,11 @@ def _process_din(raw_dir, runoff_ts, catchment, fu,
     results = [{"constituent": const_name, "suffix": cc.TS_DAILY_ADJUSTED,
                 "series": adjusted}]
 
-    # NLeached
-    leach_units = cc.UNITS_KG_PER_HA
-    leach_path = find_accumulated_file(raw_dir, catchment, fu, cc.APSIM_NLEACHED_FIELD,
-                                       leach_units, separator=separator)
-    if leach_path is None:
-        leach_path = find_accumulated_file(raw_dir, catchment, fu, cc.APSIM_NLEACHED_FIELD,
-                                           separator=separator)
-    if leach_path is not None:
-        leach_ts = _load_timeseries(leach_path)
-        leach_monthly = leach_ts.resample("MS").sum()
-        leach_adjusted = calculate_intra_monthly_flows(runoff_ts, leach_monthly)
-
-        results.append({"constituent": cc.APSIM_NLEACHED_FIELD,
-                        "suffix": cc.TS_DAILY_ADJUSTED,
-                        "units": leach_units, "series": leach_adjusted})
+    leach_results = _process_nleached(
+        raw_dir, runoff_ts, catchment, fu,
+        cc.APSIM_NLEACHED_FIELD, units, separator,
+    )
+    results.extend(leach_results)
 
     return results
 
@@ -523,6 +518,52 @@ def _process_runoff_copy(raw_dir, runoff_ts, catchment, fu,
     raw_ts = _load_timeseries(raw_path)
     return [{"constituent": const_name, "suffix": cc.TS_DAILY_NOT_ADJUSTED,
              "series": raw_ts}]
+
+
+def _process_simple_copy(raw_dir, runoff_ts, catchment, fu,
+                         const_name, units, separator):
+    """Process a water-flux variable (Rain, Runoff, Drainage, Irrigation).
+
+    These are daily values already — no runoff adjustment is applied.
+    The file is simply read and returned verbatim.
+
+    Returns list of entry dicts, or empty list.
+    """
+    # Try without units first (files are usually named without a unit suffix)
+    raw_path = find_accumulated_file(raw_dir, catchment, fu, const_name,
+                                     units=None, separator=separator)
+    if raw_path is None:
+        logger.debug("No %s file for %s / %s", const_name, catchment, fu)
+        return []
+
+    raw_ts = _load_timeseries(raw_path)
+    return [{"constituent": const_name, "suffix": cc.TS_DAILY_NOT_ADJUSTED,
+             "series": raw_ts}]
+
+
+def _process_nleached(raw_dir, runoff_ts, catchment, fu,
+                      const_name, units, separator):
+    """Process standalone NLeached: load raw monthly CSV and apply runoff adjustment.
+
+    This mirrors the NLeached handling inside ``_process_din`` but is invoked
+    when NLeached appears as its own entry in the constituents list.
+
+    Returns list of entry dicts, or empty list.
+    """
+    raw_path = find_accumulated_file(raw_dir, catchment, fu, const_name,
+                                     cc.UNITS_KG_PER_HA, separator=separator)
+    if raw_path is None:
+        raw_path = find_accumulated_file(raw_dir, catchment, fu, const_name,
+                                         units=None, separator=separator)
+    if raw_path is None:
+        logger.debug("No NLeached file for %s / %s", catchment, fu)
+        return []
+
+    raw_ts = _load_timeseries(raw_path)
+    monthly = raw_ts.resample("MS").sum()
+    adjusted = calculate_intra_monthly_flows(runoff_ts, monthly)
+    return [{"constituent": const_name, "suffix": cc.TS_DAILY_ADJUSTED,
+             "units": cc.UNITS_KG_PER_HA, "series": adjusted}]
 
 
 def _process_pesticide(raw_dir, runoff_ts, catchment, fu,
