@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from itertools import product
 from dsed.const import *
+from dsed.ow.reporting import OpenwaterDynamicSednetResults
 import logging
 logger = logging.getLogger(__name__)
 
@@ -75,8 +76,16 @@ class TimeSeriesLineItem(object):
 
   def __call__(self, results):
     ow_results = results.results
+    if self.model not in ow_results.models():
+      logger.warning(f'Model {self.model} not found in results')
+      return pd.DataFrame()
     query_tags = {k:v for k,v in self.tags.items() if k in ow_results.dims_for_model(self.model)}
     all_timeseries = ow_results.all_time_series(self.model,self.variable,**query_tags)
+    if results.start is not None:
+      all_timeseries = all_timeseries[all_timeseries.index>=results.start]
+    if results.end is not None:
+      all_timeseries = all_timeseries[all_timeseries.index<=results.end]
+
     primary_tags = PRIMARY_TAGS[self.element_type]
     tables = []
     for tag in primary_tags:
@@ -149,11 +158,30 @@ FIXED_LINE_ITEMS = [
   StateLineItem('initial','StorageRouting','S','Link','Link Initial Load','Supply','Flow',conversion_factor=M3_TO_L),
 ]
 
+def reports_for(model_fn, outputs_fn=None,start=None,end=None):
+    '''
+    Factory function to create a DynamicSednetStandardReporting object for a given model and outputs file.
+
+    Args:
+        model_fn (str): Path to the model file.
+        outputs_fn (str, optional): Path to the outputs file. If not provided, it will be inferred from the model file name.
+        start (str or pd.Timestamp, optional): Start date for filtering time series data. Defaults to None (no filtering).
+        end (str or pd.Timestamp, optional): End date for filtering time series data. Defaults to None (no filtering).
+
+    Returns:
+        DynamicSednetStandardReporting: An instance of the DynamicSednetStandardReporting class initialized
+    '''
+    from dsed.ow.reporting import OpenwaterDynamicSednetResults
+    r = OpenwaterDynamicSednetResults(model_fn, outputs_fn)
+    return DynamicSednetStandardReporting(r, start=start, end=end)
+
 class DynamicSednetStandardReporting(object):
-    def __init__(self,ow_impl):
+    def __init__(self,ow_impl:OpenwaterDynamicSednetResults,start=None,end=None):
         self.impl = ow_impl
         self.results = ow_impl.results
         self.model = ow_impl.model
+        self.start = start
+        self.end = end
         self.get_states = dict(
           initial=self.get_initial_states,
           final=self.get_final_states
@@ -161,7 +189,7 @@ class DynamicSednetStandardReporting(object):
         self._raw_results_table = None
 
     def _get_states(self,f,model,**tags):
-        mmap = self.model._map_model_dims(model)
+        mmap = self.model.model._map_model_dims(model)
         return _tabulate_model_scalars_from_file(f,model,mmap,'states',**tags)
 
     def get_final_states(self,model,**tags):
@@ -543,7 +571,7 @@ class DynamicSednetStandardReporting(object):
           kwargs['ModelElement'] = [c for c in self.impl.results.dim('catchment') if c != 'dummy-catchment']
         elif ModelElementType=='Storage':
           kwargs['ModelElementType'] = 'Node'
-          kwargs['ModelElement'] = list(self.impl.model.parameters('Storage')['node_name'])
+          kwargs['ModelElement'] = list(self.impl.model.model.parameters('Storage')['node_name'])
 
       columns = list(kwargs.keys())
       vals = [kwargs[c] for c in columns]

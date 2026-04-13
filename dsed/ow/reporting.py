@@ -184,6 +184,9 @@ class OpenwaterDynamicSednetModel(object):
 class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
     def __init__(self, fn, res_fn=None):
         self.model = OpenwaterDynamicSednetModel(fn)
+        self.meta = self.model.meta
+        self.catchments = self.model.catchments
+        self.network = self.model.network
         self.ow_results_fn = res_fn or self.model.filename_from_base('_outputs.h5')
         self.time_period = self.model.dates
 
