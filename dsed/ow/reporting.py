@@ -35,32 +35,151 @@ DOWNSTREAM_FLUXES={
     'VariablePartition':'output2' # ??????
 }
 
+NETWORK_SIDECARS = ('nodes', 'links', 'catchments')
+SIDECAR_SUFFIXES = ('.meta.json',) + tuple(f'.{c}.json' for c in NETWORK_SIDECARS)
+
+
+class _MetaDict(dict):
+  '''Meta dict that falls back to HDF5-derived values for a few well-known keys.
+
+  Keys like `start`, `end`, `constituents`, `fus` can be reconstructed from the
+  model file itself. Any other missing key raises KeyError with context pointing
+  the user at the absent .meta.json sidecar.'''
+
+  def __init__(self, sidecar_data, fallbacks, sidecar_path):
+    super().__init__(sidecar_data)
+    self._fallbacks = fallbacks
+    self._sidecar_path = sidecar_path
+
+  def _fallback(self, key):
+    fn = self._fallbacks.get(key)
+    if fn is None:
+      return None
+    val = fn()
+    if val is not None:
+      self[key] = val
+    return val
+
+  def __getitem__(self, key):
+    if super().__contains__(key):
+      return super().__getitem__(key)
+    val = self._fallback(key)
+    if val is not None:
+      return val
+    raise KeyError(
+      f'Meta key {key!r} not found in sidecar ({self._sidecar_path}) '
+      f'and has no HDF5 fallback. The sidecar may be missing (e.g. for a '
+      f'clipped model) or lack this dsed-specific classification.')
+
+  def get(self, key, default=None):
+    try:
+      return self[key]
+    except KeyError:
+      return default
+
+  def __contains__(self, key):
+    if super().__contains__(key):
+      return True
+    return self._fallback(key) is not None
+
+
 class OpenwaterDynamicSednetModel(object):
   def __init__(self,fn):
     self.fn = fn
     self.ow_model_fn = self.filename_from_base('.h5')
-    self.meta = json.load(open(self.filename_from_base('.meta.json')))
-    self.init_network(fn)
-    self.dates = pd.date_range(self.meta['start'], self.meta['end'])
     self.open_model()
 
   def filename_from_base(self,fn):
     return self.fn.replace('.h5','')+fn
 
-  def init_network(self,fn):
+  @property
+  def meta(self):
+    if not hasattr(self, '_meta'):
+      meta_fn = self.filename_from_base('.meta.json')
+      sidecar = {}
+      if os.path.exists(meta_fn):
+        with open(meta_fn) as fp:
+          sidecar = json.load(fp)
+      self._meta = _MetaDict(sidecar, self._meta_fallbacks(), meta_fn)
+    return self._meta
+
+  def _meta_fallbacks(self):
+    def _time_period():
+      tp = getattr(self.model, 'time_period', None)
+      return tp if tp is not None and len(tp) else None
+    def start():
+      tp = _time_period()
+      return tp[0].isoformat() if tp is not None else None
+    def end():
+      tp = _time_period()
+      return tp[-1].isoformat() if tp is not None else None
+    def _dim(name):
+      try:
+        vals = self.model.dim(name)
+      except Exception:
+        return None
+      return list(vals) if vals is not None else None
+    return {
+      'start': start,
+      'end': end,
+      'constituents': lambda: _dim('constituent'),
+      'fus': lambda: _dim('cgu'),
+    }
+
+  @property
+  def dates(self):
+    if not hasattr(self, '_dates'):
+      tp = getattr(self.model, 'time_period', None)
+      if tp is not None and len(tp):
+        self._dates = tp
+      else:
+        self._dates = pd.date_range(self.meta['start'], self.meta['end'])
+    return self._dates
+
+  @property
+  def nodes(self):
+    self._init_network()
+    return self._nodes
+
+  @property
+  def links(self):
+    self._init_network()
+    return self._links
+
+  @property
+  def catchments(self):
+    self._init_network()
+    return self._catchments
+
+  @property
+  def network(self):
+    self._init_network()
+    return self._network
+
+  def _init_network(self):
+    if hasattr(self, '_network'):
+      return
+    missing = [c for c in NETWORK_SIDECARS
+               if not os.path.exists(self.filename_from_base('.'+c+'.json'))]
+    if missing:
+      raise FileNotFoundError(
+        f'Network sidecar(s) missing for {self.ow_model_fn}: ' +
+        ', '.join(f'.{c}.json' for c in missing) +
+        '. Network-dependent reporting is unavailable (e.g. for a clipped '
+        'or transformed model that did not copy its sidecars).')
     from veneer.general import _extend_network
-    self.nodes = gpd.read_file(self.filename_from_base('.nodes.json'))
-    self.links = gpd.read_file(self.filename_from_base('.links.json'))
-    self.catchments = gpd.read_file(self.filename_from_base('.catchments.json'))
-    raw = [json.load(open(self.filename_from_base('.'+c+'.json'),'r')) for c in ['nodes','links','catchments']]
-    self.network = {
+    self._nodes = gpd.read_file(self.filename_from_base('.nodes.json'))
+    self._links = gpd.read_file(self.filename_from_base('.links.json'))
+    self._catchments = gpd.read_file(self.filename_from_base('.catchments.json'))
+    raw = [json.load(open(self.filename_from_base('.'+c+'.json'),'r'))
+           for c in NETWORK_SIDECARS]
+    network = {
         'type':'FeatureCollection',
         'features':sum([r['features'] for r in raw],[])
     }
     if 'crs' in raw[0]:
-      self.network['crs']=raw[0]['crs']
-
-    self.network = _extend_network(self.network)
+      network['crs']=raw[0]['crs']
+    self._network = _extend_network(network)
 
   def run(self,results_fn,overwrite=False):
     self.model.run(self.dates,results_fn,overwrite=overwrite)
@@ -72,10 +191,11 @@ class OpenwaterDynamicSednetModel(object):
 
   def copy_to(self,dest_fn):
     shutil.copyfile(self.ow_model_fn,dest_fn)
-    shutil.copyfile(self.filename_from_base('.meta.json'),dest_fn.replace('.h5','.meta.json'))
-    shutil.copyfile(self.filename_from_base('.nodes.json'),dest_fn.replace('.h5','.nodes.json'))
-    shutil.copyfile(self.filename_from_base('.links.json'),dest_fn.replace('.h5','.links.json'))
-    shutil.copyfile(self.filename_from_base('.catchments.json'),dest_fn.replace('.h5','.catchments.json'))
+    dest_base = dest_fn.replace('.h5','')
+    for suffix in SIDECAR_SUFFIXES:
+      src = self.filename_from_base(suffix)
+      if os.path.exists(src):
+        shutil.copyfile(src, dest_base + suffix)
     return OpenwaterDynamicSednetModel(dest_fn)
 
   def catchment_for_node(self,node,exact=True):
@@ -184,9 +304,6 @@ class OpenwaterDynamicSednetModel(object):
 class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
     def __init__(self, fn, res_fn=None):
         self.model = OpenwaterDynamicSednetModel(fn)
-        self.meta = self.model.meta
-        self.catchments = self.model.catchments
-        self.network = self.model.network
         self.ow_results_fn = res_fn or self.model.filename_from_base('_outputs.h5')
         self.time_period = self.model.dates
 
@@ -195,6 +312,18 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
         else:
           logging.info('No results file found for %s. Running model'%self.ow_results_fn)
           self.run_model()
+
+    @property
+    def meta(self):
+        return self.model.meta
+
+    @property
+    def catchments(self):
+        return self.model.catchments
+
+    @property
+    def network(self):
+        return self.model.network
 
     def run_model(self):
         self.model.run(self.ow_results_fn, overwrite=True)
