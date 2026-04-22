@@ -2,6 +2,7 @@ import io
 import json
 import os
 import pandas as pd
+import veneer.server_side as ss
 from veneer.extract_config import SourceExtractor as VanillaSourceExtractor, extract
 import veneer.extract_config as ec
 from veneer.actions import get_big_data_source
@@ -9,6 +10,18 @@ import veneer
 import logging
 logger = logging.getLogger(__name__)
 
+
+DYNAMIC_SEDNET_GULLY_PARAMS=[
+    'GULLYmodel.gullyModelType',
+    'GULLYmodel.Gully_Daily_Runoff_Power_Factor',
+    'GULLYmodel.Gully_Long_Term_Runoff_Factor'
+]
+
+GULLY_MODEL_TYPES=[
+    'Dynamic_SedNet.Models.SedNet_Sediment_Generation',
+    'Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model',
+    'GBR_DynSed_Extension.Models.GBR_CropSed_Wrap_Model'
+]
 
 PLUGINS=[
     'Dynamic_SedNet.dll',
@@ -20,8 +33,15 @@ def _BEFORE_BATCH_NOP(slf,x,y):
 
 class DynamicSednetExtractor(VanillaSourceExtractor):
     def __init__(self,v,dest,results=None,progress=logger.info):
+        for m in GULLY_MODEL_TYPES:
+            ss.ADDITIONAL_PARAMETERS[m] = DYNAMIC_SEDNET_GULLY_PARAMS
+
         super().__init__(v,dest,results,progress)
 
+    def extract_source_config(self):
+        super().extract_source_config()
+
+        # Extract specific spatial configuration...
     def _extract_runoff_configuration(self):
         runoff_params = self.v.model.catchment.runoff.tabulate_parameters()
         actual_rr_types = set(self.v.model.catchment.runoff.get_param_values('theBaseRRModel'))
