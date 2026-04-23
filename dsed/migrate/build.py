@@ -274,6 +274,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         catchment_template.timeseries_sediment_cgus = meta['timeseries_sediment']
         catchment_template.hillslope_cgus = meta['usle_cgus']
         catchment_template.gully_cgus = meta['gully_cgus']
+        catchment_template.gully_types = meta.get('gully_types', {})
         catchment_template.sediment_fallback_cgu = meta['emc_cgus']
 
         if self.replay_hydro:
@@ -361,6 +362,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         meta['usle_cgus'] = cgus_using_model(FINE_SEDIMENT,DS_SEDIMENT_MODEL)
         meta['gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,GULLY_MODELS)
         meta['gully_timeseries'] = self.have_csv('gully_timeseries')
+        meta['gully_types'] = self._determine_gully_types()
         meta['hillslope_emc_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,EMC_DWC_MODELS)
         meta['emc_plus_gully_cgus'] = cgus_using_one_of_models(FINE_SEDIMENT,DS_EMC_GULLY_MODEL)
 
@@ -386,6 +388,30 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         self.rainfall_runoff_model = from_source.MODEL_LOOKUP[meta['rainfall_runoff_model'].split('.')[-1]]
 
         return meta
+
+    def _determine_gully_types(self):
+        '''Determine gully model type (DERM vs SEDNET POWER) per CGU.
+
+        Returns a dict mapping CGU name to gully model type string:
+        'DERM RATIO' -> DynamicSednetGullyAlt, 'SEDNET POWER' -> DynamicSednetGully.
+        CGUs not present default to 'DERM RATIO'.
+        '''
+        GULLY_TYPE_COL = 'GULLYmodel.gullyModelType'
+        gully_types = {}
+        for csv_name in ['cg-Dynamic_SedNet.Models.SedNet_Sediment_Generation',
+                         'cg-Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model',
+                         'cg-GBR_DynSed_Extension.Models.GBR_CropSed_Wrap_Model']:
+            df = self._load_param_csv(csv_name)
+            if df is None or GULLY_TYPE_COL not in df.columns:
+                continue
+            active = df[df[GULLY_TYPE_COL] != 'NO MODEL APPLIED']
+            if not len(active):
+                continue
+            for cgu, types in active.groupby('cgu')[GULLY_TYPE_COL].unique().items():
+                if len(types) > 1:
+                    logger.warning(f'Mixed gully types for CGU {cgu}: {types}. Using first.')
+                gully_types[cgu] = types[0]
+        return gully_types
 
     def identify_rainfall_runoff_model(self):
         rr_models = self._load_csv('runoff_models')
@@ -481,7 +507,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         gbr_emc_gully_params = self._load_param_csv('cg-Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model')
         if gbr_emc_gully_params is not None:
-            gbr_emc_gully_params['Gully_Management_Practice_Factor'] = 0.0 # HACK work around bug in C#
+            # gbr_emc_gully_params['Gully_Management_Practice_Factor'] = 0.0 # HACK work around bug in C# — temporarily disabled, suspect C# bug is fixed
             for sed in ['Fine','Coarse']:
                 emc_dwc_params = gbr_emc_gully_params.rename(columns={
                     sed.lower()+'EMC':'EMC',

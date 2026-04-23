@@ -93,10 +93,11 @@ MODEL_NAME_TRANSLATIONS = {
 #     return n.EmcDwc
 
 class DynamicSednetCGU(object):
-    def __init__(self,cropping_cgu=True,sediment_fallback_model=False,gully_cgu=False,hillslope_cgu=False,ts_load_with_dwc=None):
+    def __init__(self,cropping_cgu=True,sediment_fallback_model=False,gully_cgu=False,gully_type=None,hillslope_cgu=False,ts_load_with_dwc=None):
         self.cropping_cgu = cropping_cgu
         # self.erosion_processes = erosion_processes
         self.gully_cgu = gully_cgu
+        self.gully_type = gully_type
         self.hillslope_cgu = hillslope_cgu
         self.sediment_fallback_model = sediment_fallback_model
         self.ts_load_with_dwc = ts_load_with_dwc
@@ -161,7 +162,8 @@ class DynamicSednetCGU(object):
 
         if self.gully_cgu:
             # Gully
-            gully_gen = template.add_node(n.DynamicSednetGullyAlt,process="GullyGeneration",**kwargs)
+            gully_model = n.DynamicSednetGully if self.gully_type == 'SEDNET POWER' else n.DynamicSednetGullyAlt
+            gully_gen = template.add_node(gully_model,process="GullyGeneration",**kwargs)
             link_runoff(gully_gen,'quickflow',None)
 
             fine_sum = template.add_node(n.Sum,process='ConstituentGeneration',constituent=FINE_SEDIMENT,**kwargs)
@@ -328,6 +330,7 @@ class DynamicSednetCatchment(object):
         self.timeseries_sediment_cgus = None
         self.hillslope_cgus = None
         self.gully_cgus = None
+        self.gully_types = {}
         self.sediment_fallback_cgu = None
         self.ts_load_with_dwc = ts_load_with_dwc
         self.climate_inputs = ['rainfall','pet']
@@ -530,9 +533,11 @@ class DynamicSednetCatchment(object):
             return NilCGU()
         # if cgu in ['Dryland', 'Irrigation', 'Horticulture', 'Irrigated Grazing']:
         #     return DynamicSednetAgCGU()
+        gully_type = self.gully_types.get(cgu, 'DERM RATIO') if gully_proc else None
         return DynamicSednetCGU(cropping_cgu=cropping_cgu,
                                 sediment_fallback_model=emc_proc,
                                 gully_cgu=gully_proc,
+                                gully_type=gully_type,
                                 hillslope_cgu=hillslope_proc,
                                 ts_load_with_dwc=self.ts_load_with_dwc)
 

@@ -43,8 +43,8 @@ def _arg_parser():
   parser = cmc._arg_parser()
   return parser
 
-def dsed_model_comparison(m,source_files,ow_dir,component=None,con=None):
-  return cmc.model_comparison(ow.OpenwaterDynamicSednetResults,m,source_files,ow_dir,component,con)
+def dsed_model_comparison(m,source_files,ow_dir,component=None,con=None,warmup=0):
+  return cmc.model_comparison(ow.OpenwaterDynamicSednetResults,m,source_files,ow_dir,component,con,warmup=warmup)
 
 if __name__=='__main__':
   import veneer.extract_config as ec
