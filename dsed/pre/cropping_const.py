@@ -63,6 +63,10 @@ N_PARTICULATE = "N_Particulate"
 P_PARTICULATE = "P_Particulate"
 P_FRP = "P_FRP"
 P_DOP = "P_DOP"
+RAIN =  "Rain"
+RUNOFF = "Runoff"
+DRAINAGE = "Drainage"
+IRRIGATION = "Irrigation"
 
 # --- Pesticide names ---
 AMETRYN = "Ametryn"
