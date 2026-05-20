@@ -9,31 +9,35 @@ import os
 import logging
 import shutil
 
-UPSTREAM_FLUXES={
-    'LumpedConstituentRouting':'inflowLoad',
-    'ConstituentDecay':'inflowLoad',
-    'InstreamDissolvedNutrientDecay':'incomingMassUpstream',
-    'InstreamParticulateNutrient':'incomingMassUpstream',
-    'InstreamCoarseSediment':'upstreamMass',
-    'InstreamFineSediment':'upstreamMass'
+# Reach transport models, indexed by model type, then by the constituent's
+# 'position' relative to the reach: 'upstream' (load entering from the upstream
+# reach), 'downstream' (load leaving this reach) and 'lateral' (the load
+# entering from the subcatchment generation models — i.e. the conceptual
+# "catchment output" total).
+TRANSPORT_FLUXES = {
+    'LumpedConstituentRouting':       {'upstream':'inflowLoad',          'downstream':'outflowLoad',   'lateral':'lateralLoad'},
+    'ConstituentDecay':               {'upstream':'inflowLoad',          'downstream':'outflowLoad',   'lateral':'lateralLoad'},
+    'InstreamDissolvedNutrientDecay': {'upstream':'incomingMassUpstream','downstream':'loadDownstream','lateral':'incomingMassLateral'},
+    'InstreamParticulateNutrient':    {'upstream':'incomingMassUpstream','downstream':'loadDownstream','lateral':'incomingMassLateral'},
+    'InstreamCoarseSediment':         {'upstream':'upstreamMass',        'downstream':'loadDownstream','lateral':'lateralMass'},
+    'InstreamFineSediment':           {'upstream':'upstreamMass',        'downstream':'loadDownstream','lateral':'lateralMass'},
 }
 
-DOWNSTREAM_FLUXES={
-    'LumpedConstituentRouting':'outflowLoad',
-    'ConstituentDecay':'outflowLoad',
-    'InstreamDissolvedNutrientDecay':'loadDownstream',
-    'InstreamParticulateNutrient':'loadDownstream',
-    'InstreamCoarseSediment':'loadDownstream',
-    'InstreamFineSediment':'loadDownstream',
+TRANSPORT_POSITIONS = ('upstream','downstream','lateral')
+
+# Downstream output flux for any model that can match a reporting node — both
+# transport models (above) and generation models. flux_tags_for_node() uses
+# this when a Veneer node name matches an OW node directly.
+DOWNSTREAM_FLUXES = {m: f['downstream'] for m, f in TRANSPORT_FLUXES.items()}
+DOWNSTREAM_FLUXES.update({
     'EmcDwc':'outflowLoad',
     'Sum':'outflowLoad',
     'SednetDissolvedNutrientGeneration':'totalLoad',
     'SednetParticulateNutrientGeneration':'totalLoad',
-    'SednetDissolvedNutrientGeneration':'totalLoad',
     'PassLoadIfFlow':'outputLoad',
     'StorageParticulateTrapping':'outflowLoad',
-    'VariablePartition':'output2' # ??????
-}
+    'VariablePartition':'output2',  # ??????
+})
 
 NETWORK_SIDECARS = ('nodes', 'links', 'catchments')
 SIDECAR_SUFFIXES = ('.meta.json',) + tuple(f'.{c}.json' for c in NETWORK_SIDECARS)
@@ -286,20 +290,68 @@ class OpenwaterDynamicSednetModel(object):
 
     return EMC
 
-  def transport_model(self,c):
-    LCR = 'LumpedConstituentRouting','outflowLoad'
+  def _transport_model_type(self,c):
     if c in self.meta['pesticides']:
-      # was LCR
-      return 'ConstituentDecay', 'outflowLoad'
+      return 'ConstituentDecay'
     if c in self.meta['dissolved_nutrients']:
-        return 'InstreamDissolvedNutrientDecay', 'loadDownstream'
+      return 'InstreamDissolvedNutrientDecay'
     if c in self.meta['particulate_nutrients']:
-        return 'InstreamParticulateNutrient', 'loadDownstream'
+      return 'InstreamParticulateNutrient'
     if c == 'Sediment - Coarse':
-        return 'InstreamCoarseSediment', 'loadDownstream'
+      return 'InstreamCoarseSediment'
     if c == 'Sediment - Fine':
-        return 'InstreamFineSediment', 'loadDownstream'
-    assert False
+      return 'InstreamFineSediment'
+    return None
+
+  def transport_model(self,c,position='downstream'):
+    '''
+    Return (model_type, flux) for the reach transport model handling constituent `c`.
+
+    position:
+      'downstream' (default) - flux leaving the reach to the next reach downstream
+      'upstream'             - flux entering the reach from the upstream reach
+      'lateral'              - flux entering the reach from the subcatchment generation models
+                               (i.e. the conceptual catchment output total — see catchment_output())
+    '''
+    if position not in TRANSPORT_POSITIONS:
+      raise ValueError(
+        f'Unknown position {position!r}; expected one of {TRANSPORT_POSITIONS}')
+    model = self._transport_model_type(c)
+    if model is None:
+      return None, None
+    return model, TRANSPORT_FLUXES[model][position]
+
+  def catchment_output(self,c):
+    '''
+    Return (model_type, flux) representing the total `c` load leaving the subcatchments
+    (the lateral input to the reach transport model — there is no node in the graph
+    that represents this total directly).
+    '''
+    return self.transport_model(c, position='lateral')
+
+  def streambank_output(self,c):
+    '''
+    Return (model_type, flux) for the streambank erosion source of constituent `c`.
+
+    - Sediment - Fine / Sediment - Coarse: BankErosion model fluxes
+    - Particulate nutrients: derived inside InstreamParticulateNutrient (loadFromStreambank)
+    - Everything else: (None, None)
+    '''
+    if c == 'Sediment - Fine':
+      return 'BankErosion', 'bankErosionFine'
+    if c == 'Sediment - Coarse':
+      return 'BankErosion', 'bankErosionCoarse'
+    if c in self.meta['particulate_nutrients']:
+      return 'InstreamParticulateNutrient', 'loadFromStreambank'
+    return None, None
+
+  def cgu_output(self,c,fu):
+    '''
+    Return (model_type, flux) representing the load of `c` generated by CGU `fu`.
+
+    Thin alias for generation_model(); name parallels catchment_output().
+    '''
+    return self.generation_model(c, fu)
 
 class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
     def __init__(self, fn, res_fn=None):
@@ -341,8 +393,17 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
     def generation_model(self,c,fu):
       return self.model.generation_model(c,fu)
 
-    def transport_model(self,c):
-      return self.model.transport_model(c)
+    def transport_model(self,c,position='downstream'):
+      return self.model.transport_model(c,position=position)
+
+    def catchment_output(self,c):
+      return self.model.catchment_output(c)
+
+    def streambank_output(self,c):
+      return self.model.streambank_output(c)
+
+    def cgu_output(self,c,fu):
+      return self.model.cgu_output(c,fu)
 
     def catchment_for_node(self,node,exact=True):
        return self.model.catchment_for_node(node,exact=exact)
@@ -392,8 +453,7 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
         if ow_node is None: # Match a catchment
             catchment = self.catchment_for_node(node,exact=exact_node_match)
             tags['catchment'] = catchment
-            transport_model,downstream_flux = self.transport_model(consistuent)
-            upstream_flux = UPSTREAM_FLUXES[transport_model]
+            transport_model,upstream_flux = self.transport_model(consistuent, position='upstream')
             if 'constituent' not in ow_model.dims_for_model(transport_model):
                 tags.pop('constituent')
             return transport_model,upstream_flux,tags
