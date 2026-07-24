@@ -7,7 +7,7 @@ from functools import reduce
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-from dsed.ow import DynamicSednetCatchment, FINE_SEDIMENT, COARSE_SEDIMENT
+from dsed.ow import DynamicSednetCatchment, FINE_SEDIMENT, COARSE_SEDIMENT, SHARED_HRU_LABEL
 from dsed.const import *
 
 import openwater.nodes as node_types
@@ -24,8 +24,8 @@ from logging import getLogger
 logger = getLogger(__name__)
 
 
-DEFAULT_START='1986/07/01'
-DEFAULT_END='2014/06/30'
+DEFAULT_START=None   # '1986/07/01'
+DEFAULT_END=None     #'2014/06/30'
 EXPECTED_LINK_PREFIX='link for catchment '
 SOURCE_EMC_MODEL='RiverSystem.Catchments.Models.ContaminantGenerationModels.EmcDwcCGModel'
 DS_SEDIMENT_MODEL='Dynamic_SedNet.Models.SedNet_Sediment_Generation'
@@ -33,7 +33,7 @@ DS_EMC_GULLY_MODEL='Dynamic_SedNet.Models.SedNet_EMC_And_Gully_Model'
 DS_CROP_SED_MODEL='GBR_DynSed_Extension.Models.GBR_CropSed_Wrap_Model'
 EMC_DWC_MODELS=[SOURCE_EMC_MODEL,DS_EMC_GULLY_MODEL]
 GULLY_MODELS=[DS_EMC_GULLY_MODEL,DS_SEDIMENT_MODEL,DS_CROP_SED_MODEL]
-USLE_MODEL_TYPES = ['USLEFineSedimentGeneration','MUSLEFineSedimentGeneration','CoreUSLE']
+USLE_MODEL_TYPES = ['USLEFineSedimentGeneration']#,'MUSLEFineSedimentGeneration','CoreUSLE']
 
 DS_AREAL_MODELS = [
     ('DepthToRate','area'),
@@ -106,11 +106,12 @@ def build_ow_model(data_path, time_period=None,start=DEFAULT_START, end=DEFAULT_
                    replay_hydro=False,
                    existing=None,
                    progress=logger.info,
-                   catchment_customisation=None):
+                   catchment_customisation=None,
+                   crs=None):
     if time_period is not None:
       start = time_period[0]
       end = time_period[-1]
-    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end,catchment_customisation=catchment_customisation)
+    builder = SourceOpenwaterDynamicSednetMigrator(data_path,replay_hydro=replay_hydro,start=start,end=end,catchment_customisation=catchment_customisation,crs=crs)
     return builder.build_ow_model(link_renames,progress=progress,existing_model=existing)
 
 class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurationProvider):
@@ -120,7 +121,10 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                  start=DEFAULT_START,
                  end=DEFAULT_END,
                  catchment_customisation=None,
-                 network_customisation=None):
+                 network_customisation=None,
+                 shared_runoff=False,
+                 prune_zero_area=False,
+                 crs=None):
         '''
 
         :param data_path:
@@ -130,12 +134,20 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         :param catchment_customisation:
         :param network_customisation: Optional: function that accepts a network (Veneer network) and returns modified network
                                       (eg for clipping out a subset of the model)
+        :param crs: Optional: coordinate reference system of the Source model coordinates
+                    (eg 3577 or 'EPSG:3577' for GDA94 / Australian Albers). Veneer doesn't
+                    report the project CRS, so it must be declared here. Without it, the
+                    network GeoJSON files written alongside the model carry no CRS and are
+                    read back as EPSG:4326.
         '''
-        super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None,time_period=pd.date_range(start,end))
+        super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None)
         self.data_path = data_path
         self.replay_hydro = replay_hydro
+        self.shared_runoff = shared_runoff
+        self.prune_zero_area = prune_zero_area
         self.catchment_customisation = catchment_customisation
         self.network_customisation = network_customisation
+        self.crs = crs
         self.rainfall_runoff_model = node_types.Sacramento
         global ROUTING
         ROUTING = node_types.StorageRouting
@@ -267,9 +279,13 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                                                     template_customisations=self.catchment_customisation)  # pesticides)
 
         fus = meta['fus']
-        catchment_template.hrus = fus
-        catchment_template.cgus = fus
-        catchment_template.cgu_hrus = {fu: fu for fu in fus}
+        if self.shared_runoff:
+            catchment_template.cgus = fus
+            catchment_template.use_shared_runoff(fus)
+        else:
+            catchment_template.hrus = fus
+            catchment_template.cgus = fus
+            catchment_template.cgu_hrus = {fu: fu for fu in fus}
         catchment_template.pesticide_cgus = meta['pesticide_cgus']
         catchment_template.timeseries_sediment_cgus = meta['timeseries_sediment']
         catchment_template.hillslope_cgus = meta['usle_cgus']
@@ -443,7 +459,47 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         if self.rainfall_runoff_model.name in RUNOFF_PARAMETER_CONVERTERS:
             converter = RUNOFF_PARAMETER_CONVERTERS[self.rainfall_runoff_model.name]
             runoff_parameters = runoff_parameters.rename(columns={c: converter(c) for c in runoff_parameters.columns})
+
+        if self.shared_runoff:
+            param_cols = [c for c in runoff_parameters.columns
+                          if c not in ('catchment', 'hru', 'Functional Unit')]
+            unique_per_catchment = runoff_parameters.groupby('catchment')[param_cols].nunique()
+            varying = unique_per_catchment[(unique_per_catchment > 1).any(axis=1)]
+            if len(varying):
+                logger.warning(
+                    'shared_runoff: runoff params differ across FUs within %d catchment(s); keeping first FU per catchment',
+                    len(varying))
+            runoff_parameters = runoff_parameters.drop_duplicates(subset='catchment', keep='first').copy()
+            runoff_parameters['hru'] = SHARED_HRU_LABEL
+
         return ParameterTableAssignment(runoff_parameters, self.rainfall_runoff_model, dim_columns=['catchment', 'hru'])
+
+    def _prune_zero_area_nodes(self,model):
+        fu_areas = self._load_csv('fu_areas')
+        if fu_areas is None:
+            logger.warning('prune_zero_area: fu_areas.csv not found; skipping')
+            return
+
+        stacked = fu_areas.stack()
+        zero_pairs = set(map(tuple, stacked[stacked == 0.0].index.tolist()))
+        if not zero_pairs:
+            logger.info('prune_zero_area: no zero-area (catchment, cgu) pairs')
+            return
+
+        def drop_if(tags):
+            return (tags.get('catchment'), tags.get('cgu')) in zero_pairs
+
+        removed, _ = model.prune_nodes(drop_if)
+        logger.info('prune_zero_area: dropped %d nodes for %d zero-area (catchment, cgu) pairs',
+                    removed, len(zero_pairs))
+
+        sink_models = {'Muskingum', 'StorageRouting', 'InstreamFineSediment',
+                       'InstreamCoarseSediment', 'InstreamDissolvedNutrientDecay',
+                       'InstreamParticulateNutrient'}
+        g = model._graph
+        for n in g.nodes:
+            if g.nodes[n].get('_model') in sink_models and g.in_degree(n) == 0:
+                logger.warning('prune_zero_area: %s has no remaining lateral inputs', n)
 
     def _routing_parameteriser(self,link_renames):
         routing_params = _rename_link_tag_columns(self._load_csv('fr-RiverSystem.Flow.StorageRouting'), link_renames)
@@ -782,7 +838,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         network_v = self.network()
         if self.network_customisation is not None:
           network_v = self.network_customisation(network_v)
-        network = network_v.as_dataframe()
+        network = network_v.as_dataframe(crs=self.crs)
         # network = gpd.read_file(os.path.join(self.data_path, 'network.json'))
 
         # self._network = _extend_network(self._load_json('network'))
@@ -815,6 +871,9 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             model = self.build_structure(meta,network)
         else:
             model = existing_model
+
+        if self.prune_zero_area:
+            self._prune_zero_area_nodes(model)
 
         report_time('Build basic parameterisers')
         p = Parameteriser()
