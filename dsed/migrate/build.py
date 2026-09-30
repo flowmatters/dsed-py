@@ -772,6 +772,7 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
             'BankFullFlow': 'bankFullFlow',
             'BankHeight_M': 'bankHeight',
             'FloodPlainArea_M2': 'floodPlainArea',
+            'FractionOverbankToFloodplain': 'fractionOverbankToFloodplain',
             #   'LinkHeight_M':'bankHeight',
             'LinkLength_M': 'linkLength',
             'LinkWidth_M': 'linkWidth',
