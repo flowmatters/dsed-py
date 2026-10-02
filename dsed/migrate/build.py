@@ -129,8 +129,11 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
 
         :param data_path:
         :param replay_hydro:
-        :param start:
-        :param end:
+        :param start: Optional: first day of the model time period (eg '1986/07/01')
+        :param end: Optional: last day of the model time period (eg '2014/06/30')
+                    If either is omitted, the time period is detected from the extracted
+                    Source results or, if no results were captured, from the period common to
+                    the input time series, and then trimmed to whichever of start/end was given.
         :param catchment_customisation:
         :param network_customisation: Optional: function that accepts a network (Veneer network) and returns modified network
                                       (eg for clipping out a subset of the model)
@@ -140,7 +143,18 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
                     network GeoJSON files written alongside the model carry no CRS and are
                     read back as EPSG:4326.
         '''
-        super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None)
+        time_period = None
+        if (start is not None) and (end is not None):
+            time_period = pd.date_range(start,end)
+        super(SourceOpenwaterDynamicSednetMigrator,self).__init__(data_path,climate_patterns=None,time_period=time_period)
+        if self.time_period is None:
+            raise Exception('Could not determine model time period: no start and end specified, '
+                            'and no period could be detected from Results/downstream_flow_volume '
+                            'or the input time series in %s'%data_path)
+        if time_period is None:
+            self.time_period = self.time_period[self.time_period.slice_indexer(start,end)]
+            if not len(self.time_period):
+                raise Exception('Empty model time period: start=%s, end=%s do not overlap the time period detected in %s'%(start,end,data_path))
         self.data_path = data_path
         self.replay_hydro = replay_hydro
         self.shared_runoff = shared_runoff
@@ -151,6 +165,35 @@ class SourceOpenwaterDynamicSednetMigrator(from_source.FileBasedModelConfigurati
         self.rainfall_runoff_model = node_types.Sacramento
         global ROUTING
         ROUTING = node_types.StorageRouting
+
+    def detect_time_period(self):
+        time_period = super(SourceOpenwaterDynamicSednetMigrator,self).detect_time_period()
+        if time_period is not None:
+            return time_period
+
+        # No Source results captured: fall back to the period covered by all the input time series.
+        # Climate often extends well before the Source simulation period, whereas the others don't.
+        if self._csv_filename('climate') is None:
+            return None
+        climate = self._load_csv('climate')
+        start = climate.index[0]
+        end = climate.index[-1]
+        # Forward filled when loaded, so only the start constrains the period
+        for f, forward_filled in [('cropping',False),('usle_timeseries',True),('gully_timeseries',True)]:
+            if self._csv_filename(f) is None:
+                continue
+            index = self._load_csv(f).index
+            if not len(index):
+                continue
+            start = max(start,index[0])
+            if not forward_filled:
+                end = min(end,index[-1])
+
+        time_period = climate.index[climate.index.slice_indexer(start,end)]
+        if not len(time_period):
+            return None
+        logger.info(f'Detected time period from input time series: {time_period[0]} to {time_period[-1]}')
+        return time_period
 
     # def _load_json(self,f):
     #     return json.load(open(os.path.join(self.data_path, f + '.json')))

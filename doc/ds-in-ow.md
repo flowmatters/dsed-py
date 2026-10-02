@@ -56,6 +56,7 @@ In general, the model setup is a two step process:
 For Dynamic Sednet, the most common way to establish the model graph is to convert an existing model from Source, using the functionality in the `migrate` namespace:
 
 ```python
+import pandas as pd
 import veneer
 from openwater import discovery as disco
 from dsed import migrate
@@ -70,12 +71,14 @@ extractor = migrate.extract.SourceExtractor(v,SOURCE_FILES)
 extractor.extract_source_config()
 
 # 2. Build the Openwater model
-builder = migrate.build.SourceOpenwaterDynamicSednetMigrator(SOURCE_FILES)
-model, meta, network = builder.build_ow_model()
-
+# start and end are optional. If omitted, the time period is detected from the
+# extracted Source results or, failing that, from the input time series.
 START='1986/07/01'
 END='2014/06/30'
 TIME_PERIOD = pd.date_range(START,END)
+
+builder = migrate.build.SourceOpenwaterDynamicSednetMigrator(SOURCE_FILES,start=START,end=END)
+model, meta, network = builder.build_ow_model()
 
 # 3. Run the Openwater model and retrieve results
 model.write_model('D:/shiny_new_model.h5',len(TIME_PERIOD))
