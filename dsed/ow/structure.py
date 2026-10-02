@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 LANDSCAPE_CONSTITUENT_SOURCES=['Hillslope','Gully']
 
+SHARED_HRU_LABEL = 'HRU'
+
 FINE_SEDIMENT = 'Sediment - Fine'
 COARSE_SEDIMENT = 'Sediment - Coarse'
 CGUS_TS_N_DIN = ['Sugarcane','Bananas']
@@ -335,6 +337,7 @@ class DynamicSednetCatchment(object):
         self.ts_load_with_dwc = ts_load_with_dwc
         self.climate_inputs = ['rainfall','pet']
         self.template_customisations = template_customisations
+        self.shared_runoff = False
 
         self.rr = n.Sacramento
         self.cg = defaultdict(lambda:n.EmcDwc,{})
@@ -518,6 +521,12 @@ class DynamicSednetCatchment(object):
                 reach_template.add_link(OWLink(fine_sed_con_lag_model,'outflow',pnm,'lateralSediment'))
 
         return reach_template
+
+    def use_shared_runoff(self,fus):
+        self.hrus = [SHARED_HRU_LABEL]
+        self.cgus = list(fus)
+        self.cgu_hrus = {fu: SHARED_HRU_LABEL for fu in fus}
+        self.shared_runoff = True
 
     def cgu_factory(self,cgu):
         cropping_cgu = (self.pesticide_cgus is not None) and (cgu in self.pesticide_cgus)
