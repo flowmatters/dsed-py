@@ -25,6 +25,42 @@ TRANSPORT_FLUXES = {
 
 TRANSPORT_POSITIONS = ('upstream','downstream','lateral')
 
+# Mass stored in the reach by each transport model (a state, so only available at the start and end of a run)
+TRANSPORT_STORES = {
+    'LumpedConstituentRouting':       'storedMass',
+    'ConstituentDecay':               'storedMass',
+    'InstreamDissolvedNutrientDecay': 'totalStoredMass',
+    'InstreamParticulateNutrient':    'instreamStoredMass',
+    'InstreamCoarseSediment':         'totalStoredMass',
+    'InstreamFineSediment':           'totalStoredMass',
+}
+
+# Other in-stream processes, by transport model. Values ending in 'Store'/'StoredMass' are states.
+INSTREAM_PROCESSES = {
+    'InstreamFineSediment': {
+        'floodplain_deposition':'loadToFloodplain',
+        'channel_deposition':'loadToChannelDeposition', # net: negative when remobilising
+        'channel_store':'channelStoreFine',
+    },
+    'InstreamCoarseSediment': {
+        'channel_store':'channelStore',
+    },
+    'InstreamParticulateNutrient': {
+        'floodplain_deposition':'loadToFloodplain',
+        'channel_deposition':'loadDeposited', # net: negative when remobilising
+        'channel_store':'channelStoredMass',
+    },
+    'InstreamDissolvedNutrientDecay': {
+        'floodplain_deposition':'loadToFloodplain',
+        'decay':'decayedLoad',
+        'point_source':'loadFromPointSource',
+    },
+    'ConstituentDecay': {
+        'decay':'decayedLoad',
+    },
+}
+INSTREAM_PROCESS_NAMES = ('floodplain_deposition','channel_deposition','channel_store','decay','point_source')
+
 # Downstream output flux for any model that can match a reporting node — both
 # transport models (above) and generation models. flux_tags_for_node() uses
 # this when a Veneer node name matches an OW node directly.
@@ -290,6 +326,67 @@ class OpenwaterDynamicSednetModel(object):
 
     return EMC
 
+  def generation_components(self):
+    '''
+    The constituent generation budget terms, as a list of dicts with:
+      budget_element - from dsed.ow.vocabulary (Hillslope, Gully, Quickflow, Baseflow, Leached)
+      model, variable - the model type and output carrying the term
+      filters - tags a node must match ({tag: value or list of values})
+      assign - tag values to give the resulting rows (eg the constituent, for models without a constituent tag)
+
+    Generation is made of several node types (eg a gully model, time series nodes and EmcDwc nodes summed
+    together), so the role of each node is inferred here from model types, constituents and meta.
+    '''
+    from . import vocabulary as v
+    meta = self.meta
+    sediments = meta['sediments']
+    particulates = meta['particulate_nutrients']
+    dissolved = meta['dissolved_nutrients']
+    pesticides = meta['pesticides']
+    components = []
+    def add(element,model,variable,filters=None,assign=None):
+      components.append(dict(budget_element=element,model=model,variable=variable,
+                             filters=filters or {},assign=assign or {}))
+
+    sediment_vars = list(zip(sediments,['fineLoad' if 'Fine' in s else 'coarseLoad' for s in sediments]))
+    for gully_model in ['DynamicSednetGullyAlt','DynamicSednetGully']:
+      for sed,var in sediment_vars:
+        add(v.GULLY,gully_model,var,assign={'constituent':sed})
+    for sed in sediments:
+      usle_var = 'totalFineLoad' if 'Fine' in sed else 'totalCoarseLoad'
+      add(v.HILLSLOPE,'USLEFineSedimentGeneration',usle_var,assign={'constituent':sed})
+      # Cropping time series (after delivery ratios), and EMC/DWC hillslope or cropping DWC loads
+      add(v.HILLSLOPE,'DeliveryRatio','output',filters={'constituent':sed})
+      add(v.HILLSLOPE,'EmcDwc','totalLoad',filters={'constituent':sed})
+
+    for c in particulates:
+      add(v.HILLSLOPE,'SednetParticulateNutrientGeneration','hillslopeContribution',filters={'constituent':c})
+      add(v.GULLY,'SednetParticulateNutrientGeneration','gullyContribution',filters={'constituent':c})
+      add(v.BASEFLOW,'SednetParticulateNutrientGeneration','slowflowConstituent',filters={'constituent':c})
+
+    for c in dissolved:
+      add(v.QUICKFLOW,'SednetDissolvedNutrientGeneration','quickflowConstituent',filters={'constituent':c})
+      add(v.BASEFLOW,'SednetDissolvedNutrientGeneration','slowflowConstituent',filters={'constituent':c})
+
+    for c in particulates + dissolved + pesticides:
+      add(v.QUICKFLOW,'EmcDwc','quickLoad',filters={'constituent':c})
+      add(v.BASEFLOW,'EmcDwc','slowLoad',filters={'constituent':c})
+      # Time series loads, after scaling (sediment scaling nodes are intermediate steps, not budget terms)
+      add(v.QUICKFLOW,'ApplyScalingFactor','output',filters={'constituent':c})
+
+    if dissolved:
+      add(v.LEACHED,'ApplyScalingFactor','output',filters={'constituent':'NLeached'},assign={'constituent':'N_DIN'})
+
+    # Time series loads used without scaling
+    for c in pesticides:
+      add(v.QUICKFLOW,'PassLoadIfFlow','outputLoad',filters={'constituent':c})
+    for c in dissolved:
+      direct_cgus = [fu for fu in meta['fus'] if self.generation_model(c,fu)[0]=='PassLoadIfFlow']
+      if direct_cgus:
+        add(v.QUICKFLOW,'PassLoadIfFlow','outputLoad',filters={'constituent':c,'cgu':direct_cgus})
+
+    return components
+
   def _transport_model_type(self,c):
     if c in self.meta['pesticides']:
       return 'ConstituentDecay'
@@ -320,6 +417,54 @@ class OpenwaterDynamicSednetModel(object):
     if model is None:
       return None, None
     return model, TRANSPORT_FLUXES[model][position]
+
+  def transport_store(self,c):
+    '''
+    Return (model_type, state) for the mass of `c` stored in the reach, or (None, None).
+    '''
+    model = self._transport_model_type(c)
+    if model is None:
+      return None, None
+    return model, TRANSPORT_STORES[model]
+
+  def instream_process(self,c,process):
+    '''
+    Return (model_type, variable) for an in-stream process acting on constituent `c`, or (None, None)
+    if that process isn't modelled for `c`.
+
+    process: one of INSTREAM_PROCESS_NAMES
+      'floodplain_deposition' - load deposited on the floodplain
+      'channel_deposition'    - net load deposited in the channel (negative when remobilising)
+      'channel_store'         - mass in the channel bed store (a state)
+      'decay'                 - load lost to decay
+      'point_source'          - load added by point sources
+    '''
+    if process not in INSTREAM_PROCESS_NAMES:
+      raise ValueError(f'Unknown process {process!r}; expected one of {INSTREAM_PROCESS_NAMES}')
+    model = self._transport_model_type(c)
+    variable = INSTREAM_PROCESSES.get(model,{}).get(process)
+    if variable is None:
+      return None, None
+    return model, variable
+
+  def outlets(self):
+    '''
+    The network's outlet nodes, as a list of dicts with:
+      name      - node name
+      catchment - catchment of the link flowing into the outlet
+      kind      - the node's Source node type, eg 'ConfluenceNodeModel', 'ExtractionNodeModel'
+    '''
+    result = []
+    for node in self.network.outlet_nodes():
+      props = node['properties']
+      links = self.network.upstream_links(props['id'])._list
+      assert len(links)==1, f'Expected one link into outlet {props["name"]}, got {len(links)}'
+      result.append(dict(
+        name=props['name'],
+        catchment=links[0]['properties']['name'].replace('link for catchment ',''),
+        kind=props.get('icon','').split('/')[-1]
+      ))
+    return result
 
   def catchment_output(self,c):
     '''
@@ -395,6 +540,18 @@ class OpenwaterDynamicSednetResults(OpenwaterCatchmentModelResults):
 
     def transport_model(self,c,position='downstream'):
       return self.model.transport_model(c,position=position)
+
+    def transport_store(self,c):
+      return self.model.transport_store(c)
+
+    def instream_process(self,c,process):
+      return self.model.instream_process(c,process)
+
+    def outlets(self):
+      return self.model.outlets()
+
+    def generation_components(self):
+      return self.model.generation_components()
 
     def catchment_output(self,c):
       return self.model.catchment_output(c)
